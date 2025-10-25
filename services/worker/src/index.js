@@ -5,6 +5,8 @@ import ventasRoutes from './routes/ventas.js';
 import comprasRoutes from './routes/compras.js';
 import contratosRoutes from './routes/contratos.js';
 import agentRoutes from './routes/agent.js';
+import prospectoRoutes from './routes/prospecto.js';
+import routerRoutes from './routes/router.js';
 import { handleQueueMessage } from './services/queue.js';
 
 const app = new Hono();
@@ -33,6 +35,12 @@ app.route('/api/contratos', contratosRoutes);
 
 // Agent routes (WhatsApp service - requires API key)
 app.route('/api/agent', agentRoutes);
+
+// Router routes (identifica cliente vs prospecto)
+app.route('/api/router', routerRoutes);
+
+// Prospecto routes (usuarios no registrados)
+app.route('/api/prospecto', prospectoRoutes);
 
 export default {
   // Handle HTTP requests

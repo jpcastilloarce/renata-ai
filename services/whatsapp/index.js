@@ -63,21 +63,40 @@ whatsappClient.on('message', async (msg) => {
   console.log(`Mensaje recibido de ${from}: ${body}`);
 
   try {
-    // Extract phone number from WhatsApp ID
-    const phoneNumber = from.split('@')[0];
+    // Extract phone number from WhatsApp ID (sin @c.us)
+    const phoneNumber = from.split('@')[0]; // "56993788826"
 
-    // Format phone number with + prefix
-    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+    // PASO 1: Determinar si es cliente o prospecto
+    const routeResponse = await fetch(`${WORKER_API_URL}/api/router/identify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AGENT_API_KEY}`
+      },
+      body: JSON.stringify({ telefono: phoneNumber })
+    });
 
-    // Send question to Worker API (Worker will look up RUT by phone)
-    const response = await fetch(`${WORKER_API_URL}/api/agent/message`, {
+    if (!routeResponse.ok) {
+      console.error('Error en router:', await routeResponse.text());
+      await msg.reply('Ocurrió un error al procesar tu mensaje. Intenta nuevamente.');
+      return;
+    }
+
+    const { type } = await routeResponse.json(); // 'cliente' o 'prospecto'
+
+    // PASO 2: Enviar a la ruta correspondiente
+    const endpoint = type === 'cliente'
+      ? '/api/agent/message'      // Tu compañero trabaja aquí
+      : '/api/prospecto/message';  // TÚ trabajas aquí
+
+    const response = await fetch(`${WORKER_API_URL}${endpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${AGENT_API_KEY}`
       },
       body: JSON.stringify({
-        telefono: formattedPhone,
+        telefono: type === 'cliente' ? `+${phoneNumber}` : phoneNumber,
         mensaje: body
       })
     });
@@ -91,9 +110,9 @@ whatsappClient.on('message', async (msg) => {
     const data = await response.json();
     const answer = data.respuesta;
 
-    // Send response back to user
+    // PASO 3: Enviar respuesta por WhatsApp
     await msg.reply(answer);
-    console.log(`Respuesta enviada a ${from}`);
+    console.log(`[${type.toUpperCase()}] Respuesta enviada a ${from}`);
 
   } catch (error) {
     console.error('Error procesando mensaje:', error);
