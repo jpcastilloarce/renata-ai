@@ -82,16 +82,18 @@ router.post('/message', async (c) => {
 
     // Detectar todas las intenciones
     const intents = detectIntents(mensaje);
+    const questionParts = splitQuestionByIntent(mensaje, intents);
     let respuestas = [];
     for (const intent of intents) {
+      const fragment = questionParts[intent] || mensaje;
       if (intent === 'ventas' || intent === 'compras') {
-        respuestas.push(await handleTaxQuestion(c.env, rut, mensaje, intent));
+        respuestas.push(await handleTaxQuestion(c.env, rut, fragment, intent));
       } else if (intent === 'detalle_ventas' || intent === 'detalle_compras') {
-        respuestas.push(await handleDetailQuestion(c.env, rut, mensaje, intent));
+        respuestas.push(await handleDetailQuestion(c.env, rut, fragment, intent));
       } else if (intent === 'contrato') {
-        respuestas.push(await handleContractQuestion(c.env, rut, mensaje));
+        respuestas.push(await handleContractQuestion(c.env, rut, fragment));
       } else if (intent === 'general') {
-        if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
+        if (fragment.toLowerCase().includes('f29') || fragment.toLowerCase().includes('vence')) {
           respuestas.push(`Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`);
         } else {
           respuestas.push(`Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras, detalles y contratos. ¿Qué necesitas saber?`);
@@ -128,6 +130,18 @@ function detectIntents(question) {
   if (lower.includes('contrato') || lower.includes('cláusula') || lower.includes('vigente') || lower.includes('normativa')) intents.push('contrato');
   if (intents.length === 0) intents.push('general');
   return intents;
+}
+
+// Asocia fragmentos de la pregunta a cada intención detectada
+function splitQuestionByIntent(question, intents) {
+  // Separar por " y " o ". " o "? " para preguntas compuestas
+  const fragments = question.split(/\s+y\s+|\.\s+|\?\s+/i).map(f => f.trim()).filter(Boolean);
+  const mapping = {};
+  // Heurística simple: asignar fragmento por orden de aparición
+  for (let i = 0; i < intents.length; i++) {
+    mapping[intents[i]] = fragments[i] || question;
+  }
+  return mapping;
 }
 
 // Helper functions (duplicated from contratos.js for modularity)
