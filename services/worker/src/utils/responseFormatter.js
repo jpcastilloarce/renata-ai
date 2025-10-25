@@ -28,10 +28,13 @@ export async function formatResponse({ texto, telefono, env, userMode = null }) 
 
     if (modo === 'audio') {
       // Convertir texto a audio usando ElevenLabs
+      // Usa ELEVENLABS_VOICE_ID del env o voz por defecto
+      const voiceId = env.ELEVENLABS_VOICE_ID || VOCES_ESPANOL.FEMENINA;
+
       const audioBuffer = await textToAudio(
         env.ELEVENLABS_API_KEY,
         texto,
-        VOCES_ESPANOL.FEMENINA, // Voz por defecto
+        voiceId,
         { voice_settings: VOICE_PRESETS.AMIGABLE }
       );
 
