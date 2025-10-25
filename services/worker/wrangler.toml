@@ -1,0 +1,53 @@
+name = "sii-rcv-api"
+main = "src/index.js"
+compatibility_date = "2025-10-25"
+workers_dev = true
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "rcv_db"
+database_id = "975a1839-c13c-414c-8794-a41654d615c3"  # Replace with actual ID after creating D1 database
+preview_database_id = "975a1839-c13c-414c-8794-a41654d615c3"  # Use production DB in dev mode
+
+# KV namespace for sessions
+[[kv_namespaces]]
+binding = "SESSIONS_KV"
+id = "d84a6633a72349278fc52c680f19befe"  # Replace with actual ID after creating KV namespace
+preview_id = "d84a6633a72349278fc52c680f19befe"  # Use production KV in dev mode
+
+# R2 bucket for contract PDFs
+[[r2_buckets]]
+binding = "CONTRACTS_BUCKET"
+bucket_name = "contratos-bucket"
+preview_bucket_name = "contratos-bucket"  # Use production R2 in dev mode
+
+# Vectorize index for semantic search
+[[vectorize]]
+binding = "CONTRATOS_INDEX"
+index_name = "contract_index"
+remote = true  # Use remote Vectorize in dev mode
+
+# Queues for background tasks
+[[queues.producers]]
+binding = "sii_tasks"
+queue = "sii-tasks"
+
+[[queues.consumers]]
+queue = "sii-tasks"
+max_batch_size = 10
+max_batch_timeout = 30
+
+# Cron triggers for periodic updates
+[triggers]
+crons = ["0 2 * * *"]  # Run daily at 2 AM
+
+# Workers AI binding
+[ai]
+binding = "AI"
+
+# Environment variables
+[vars]
+SII_API_BASE = "https://legacy.apigateway.cl/api/v1/sii/rcv"
+WHATSAPP_SERVICE_URL = "https://better-chicken-take.loca.lt"  # Localtunnel URL for WhatsApp service
+AGENT_API_KEY = "12a7035a667ae8f91dfdb9c1b2f4f0b2cff813c6e7b55f26bd7cd9e95bc68f17"  # Secret key for WhatsApp service communication

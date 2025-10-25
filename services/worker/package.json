@@ -1,0 +1,20 @@
+{
+  "name": "sii-rcv-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for SII RCV integration with AI capabilities",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "migrate": "wrangler d1 execute rcv_db --file=../../database/schema.sql",
+    "seed": "wrangler d1 execute rcv_db --file=../../database/seeds.sql"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0"
+  }
+}

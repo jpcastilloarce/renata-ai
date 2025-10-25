@@ -1,0 +1,194 @@
+import { Hono } from 'hono';
+import { logEvent } from '../utils/logger.js';
+
+const router = new Hono();
+
+/**
+ * Agent middleware - validate API key
+ */
+router.use('/*', async (c, next) => {
+  const authHeader = c.req.header('Authorization');
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'No autorizado' }, 401);
+  }
+
+  const apiKey = authHeader.substring(7);
+
+  if (apiKey !== c.env.AGENT_API_KEY) {
+    return c.json({ error: 'API key inválida' }, 401);
+  }
+
+  await next();
+});
+
+/**
+ * POST /api/agent/message
+ * Handle incoming message from WhatsApp service
+ * This endpoint is called by the Node.js WhatsApp service
+ */
+router.post('/message', async (c) => {
+  try {
+    const { rut, mensaje } = await c.req.json();
+
+    if (!rut || !mensaje) {
+      return c.json({ error: 'Se requiere RUT y mensaje' }, 400);
+    }
+
+    // Verify user exists
+    const user = await c.env.DB.prepare(
+      'SELECT rut FROM contributors WHERE rut = ?'
+    ).bind(rut).first();
+
+    if (!user) {
+      return c.json({
+        respuesta: 'Usuario no registrado. Por favor regístrate en la plataforma primero.'
+      });
+    }
+
+    // Process the question (similar to /api/ask but without auth middleware)
+    const questionType = categorizeQuestion(mensaje);
+
+    let answer = '';
+
+    if (questionType === 'ventas' || questionType === 'compras') {
+      answer = await handleTaxQuestion(c.env, rut, mensaje, questionType);
+    } else if (questionType === 'contrato' || questionType === 'general') {
+      answer = await handleContractQuestion(c.env, rut, mensaje);
+    } else if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
+      answer = 'El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.';
+    } else {
+      answer = 'Hola! Puedo ayudarte con consultas sobre tus ventas, compras y contratos. ¿Qué necesitas saber?';
+    }
+
+    // Store messages
+    await c.env.DB.prepare(
+      'INSERT INTO messages (rut, sender, content) VALUES (?, ?, ?)'
+    ).bind(rut, 'user', mensaje).run();
+
+    await c.env.DB.prepare(
+      'INSERT INTO messages (rut, sender, content) VALUES (?, ?, ?)'
+    ).bind(rut, 'agent', answer).run();
+
+    return c.json({ respuesta: answer });
+  } catch (error) {
+    console.error('Error processing agent message:', error);
+    return c.json({ error: 'Error al procesar mensaje' }, 500);
+  }
+});
+
+// Helper functions (duplicated from contratos.js for modularity)
+
+function categorizeQuestion(question) {
+  const lowerQuestion = question.toLowerCase();
+
+  if (lowerQuestion.includes('vendí') || lowerQuestion.includes('venta') || lowerQuestion.includes('factur')) {
+    return 'ventas';
+  } else if (lowerQuestion.includes('compré') || lowerQuestion.includes('compra') || lowerQuestion.includes('proveedor')) {
+    return 'compras';
+  } else if (lowerQuestion.includes('contrato') || lowerQuestion.includes('cláusula') || lowerQuestion.includes('vigente')) {
+    return 'contrato';
+  }
+
+  return 'general';
+}
+
+async function handleTaxQuestion(env, rut, question, type) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  let periodo = null;
+  let monthNum = null;
+
+  // Extract month from question
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+
+  // Extract year from question (e.g., "2023", "2024")
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+
+  if (monthNum) {
+    periodo = `${year}-${monthNum}`;
+  } else {
+    // If no month specified, try to find any data for this RUT
+    const table = type === 'ventas' ? 'ventas_resumen' : 'compras_resumen';
+    const { results } = await env.DB.prepare(`
+      SELECT periodo, SUM(rsmnMntTotal) as total
+      FROM ${table}
+      WHERE rut = ?
+      GROUP BY periodo
+      ORDER BY periodo DESC
+      LIMIT 1
+    `).bind(rut).all();
+
+    if (results.length > 0 && results[0].total) {
+      const total = results[0].total;
+      const [year, month] = results[0].periodo.split('-');
+      const monthName = Object.keys(months).find(key => months[key] === month);
+      return `Tu último registro de ${type} fue en ${monthName} ${year} por CLP ${total.toLocaleString('es-CL')}.`;
+    }
+
+    return `No encontré datos de ${type} en tu historial.`;
+  }
+
+  const table = type === 'ventas' ? 'ventas_resumen' : 'compras_resumen';
+  const { results } = await env.DB.prepare(`
+    SELECT SUM(rsmnMntTotal) as total
+    FROM ${table}
+    WHERE rut = ? AND periodo = ?
+  `).bind(rut, periodo).all();
+
+  if (results.length > 0 && results[0].total) {
+    const total = results[0].total;
+    const monthName = Object.keys(months).find(key => months[key] === monthNum);
+    return `En ${monthName} de ${year} ${type === 'ventas' ? 'vendiste' : 'compraste'} CLP ${total.toLocaleString('es-CL')}.`;
+  }
+
+  return `No encontré datos de ${type} para ${monthNum ? Object.keys(months).find(key => months[key] === monthNum) : ''} ${year}.`;
+}
+
+async function handleContractQuestion(env, rut, question) {
+  const questionEmbedding = await env.AI.run('@cf/baai/bge-base-en-v1.5', {
+    text: question
+  });
+
+  const questionVector = questionEmbedding.data[0];
+
+  // No filter by RUT - contracts are generic SII data accessible to all contributors
+  const searchResults = await env.CONTRATOS_INDEX.query(questionVector, {
+    topK: 3,
+    returnMetadata: true
+  });
+
+  if (!searchResults.matches || searchResults.matches.length === 0) {
+    return 'No encontré información relevante en los contratos para responder esta pregunta.';
+  }
+
+  const fragments = searchResults.matches.map(match => match.metadata.content);
+  const context = fragments.join('\n\n');
+
+  const aiResponse = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
+    messages: [
+      {
+        role: 'system',
+        content: `Eres un asistente que responde preguntas sobre contratos. Usa el siguiente contexto para responder la pregunta del usuario:\n\n${context}`
+      },
+      {
+        role: 'user',
+        content: question
+      }
+    ]
+  });
+
+  return aiResponse.response || 'No pude generar una respuesta adecuada.';
+}
+
+export default router;

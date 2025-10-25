@@ -1,0 +1,33 @@
+{
+  "name": "sii-rcv-cloudflare-integration",
+  "version": "1.0.0",
+  "description": "Sistema de Integración SII con Cloudflare Workers, D1, R2, RAG y WhatsApp",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:worker\" \"npm run dev:wa\"",
+    "dev:worker": "cd services/worker && npm run dev",
+    "dev:wa": "cd services/whatsapp && npm run dev",
+    "deploy:worker": "cd services/worker && npm run deploy",
+    "migrate": "cd services/worker && npm run migrate",
+    "seed": "cd services/worker && npm run seed",
+    "install:all": "npm install && cd services/worker && npm install && cd ../whatsapp && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "d1",
+    "r2",
+    "vectorize",
+    "workers-ai",
+    "sii",
+    "chile",
+    "whatsapp",
+    "rag",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT"
+}

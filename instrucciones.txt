@@ -1,0 +1,1160 @@
+Proyecto Backend en Cloudflare: Integración SII, R2, RAG y WhatsApp
+Arquitectura General
+
+Este proyecto consta de dos servicios principales, ambos implementados en JavaScript y compartiendo la misma base de datos Cloudflare D1 (SQLite administrado en la nube
+developers.cloudflare.com
+):
+
+Servicio Principal (Cloudflare Worker) – Una API REST serverless desplegada en Cloudflare Workers
+developers.cloudflare.com
+. Maneja registro de usuarios (contribuyentes), autenticación (con tokens de sesión en KV), consulta y almacenamiento de datos tributarios desde el SII, y funcionalidades de extracción de información desde contratos PDF con IA. También expone endpoints para consultar datos tributarios locales y para realizar retrieval-augmented generation (RAG) sobre documentos contractuales.
+
+Servicio Pasarela de WhatsApp (Node.js) – Un microservicio Node que emplea la librería whatsapp-web.js para interactuar con WhatsApp Web. Se encarga de enviar códigos OTP por WhatsApp, recibir consultas de usuarios vía chat, reenviar preguntas al servicio principal (vía HTTP) y devolver las respuestas al usuario en WhatsApp. Mantiene un registro de los mensajes en D1 para conservar el contexto conversacional.
+
+La siguiente figura muestra la arquitectura a alto nivel, con los componentes Cloudflare (Workers, D1, KV, R2, Vectorize, Queues) y el módulo externo de WhatsApp:
+
+Arquitectura general del sistema: el Cloudflare Worker maneja la API REST, interactúa con SII y servicios de Cloudflare (KV, D1, R2, AI, Vectorize, Queues), y el microservicio Node/WhatsApp actúa como gateway de mensajería.
+
+Características clave:
+
+Capa gratuita de Cloudflare: Todo el diseño funciona en el plan gratuito de Cloudflare. Cloudflare Workers, D1, KV, R2, y Vectorize tienen disponibles planes free o beta sin costo (salvo límites de uso razonables)
+developers.cloudflare.com
+developers.cloudflare.com
+. Workers AI se puede usar en modo pago por uso, con modelos eficientes para minimizar costo (embeddings a ~$0.067 por 1M tokens
+developers.cloudflare.com
+). Cloudflare Queues no cobra por ancho de banda de egreso y ayuda a desacoplar tareas pesadas
+developers.cloudflare.com
+.
+
+Base de Datos Unificada (D1): Se utiliza Cloudflare D1 como almacén relacional único para usuarios, sesiones, OTP, logs, mensajes, datos tributarios y metadatos de contratos. D1 es una base de datos SQLite serverless administrada por Cloudflare, disponible incluso en planes gratuitos
+developers.cloudflare.com
+. Esto garantiza consistencia fuerte para datos críticos (a diferencia de KV que es eventualmente consistente) y permite usar SQL para consultas complejas.
+
+Almacenamiento de Archivos (R2): Los documentos PDF de contratos se almacenan en Cloudflare R2 (almacenamiento de objetos S3-compatible). R2 permite guardar grandes archivos sin costo de salida de datos hacia los Workers
+developers.cloudflare.com
+. El Worker sube los PDFs a un bucket R2 en la cuenta gratuita.
+
+Inteligencia Artificial en Workers: Se aprovecha Cloudflare Workers AI para dos tareas:
+
+Generación de embeddings de texto con un modelo pre-entrenado (@cf/baai/bge-base-en-v1.5), que convierte texto en vectores de 768 dimensiones
+developers.cloudflare.com
+. Esto se usa para indexar semánticamente el contenido de contratos.
+
+Respuesta a preguntas (LLM): Para el endpoint de preguntas, se emplea un modelo de lenguaje de instrucciones (p.ej. una variante de Llama 2 disponible en Workers AI) para generar la respuesta final usando contexto proporcionado. Esto implementa la técnica Retrieval-Augmented Generation (RAG): el sistema recupera fragmentos relevantes de datos propios y los pasa al modelo para producir una respuesta informada
+developers.cloudflare.com
+developers.cloudflare.com
+.
+
+Integración con SII (API Gateway): El sistema se integra con la API Gateway del SII (Servicio de Impuestos Internos de Chile) para obtener el Registro de Compras y Ventas (RCV) del contribuyente. En particular, consume 4 endpoints principales (vía método HTTP POST): Resumen de Ventas, Detalle de Ventas, Resumen de Compras y Detalle de Compras. Las especificaciones de estos endpoints (parámetros, payload y esquema JSON de respuesta) están definidas en el archivo OpenAPI (YAML) proporcionado por el usuario. El Worker utiliza las credenciales SII (RUT y clave SII) del contribuyente para autenticarse en estas consultas.
+
+Mecanismo de Cola y Cron: Para evitar saturar la API del SII y respetar cuotas, se implementa una extracción proactiva en segundo plano. Un Cron Trigger de Cloudflare Workers programa tareas (p. ej. diariamente o cada X horas) que agregan mensajes a una Cloudflare Queue indicando qué datos actualizar. Un consumidor Worker (parte del mismo servicio principal) procesa secuencialmente la cola: cada mensaje causa llamadas al SII para un RUT y período dado, con demoras y reintentos gestionados según headers de respuesta (Retry-After, X-Lock-Reset). Cloudflare Queues garantiza entrega de mensajes con retry y permite sacar carga de las requests inmediatas
+developers.cloudflare.com
+. Así, la actualización del RCV ocurre en background sin bloquear peticiones de usuarios, y cumpliendo con las limitaciones de la API del SII (códigos 423 Locked y 429 Too Many Requests).
+
+Comunicación con WhatsApp: El servicio Node usa la librería whatsapp-web.js (cliente no oficial de WhatsApp Web via Puppeteer). Esto permite, con una sesión de WhatsApp Web iniciada (se escanea un QR al iniciar por única vez), enviar y recibir mensajes programáticamente
+github.com
+. El microservicio expone un pequeño API (o utiliza la propia cola) para que el Worker le indique enviar OTPs. Hacia el otro lado, escucha eventos de mensajes entrantes en WhatsApp y los envía al Worker para generar respuestas. Nota: whatsapp-web.js ofrece prácticamente todas las funciones disponibles en la interfaz web de WhatsApp dentro de Node
+github.com
+, aunque no es oficial (WhatsApp puede bloquear cuentas de bots, se recomienda uso cuidadoso).
+
+A continuación se detallan cada uno de los componentes y flujos.
+
+Servicio Principal: Cloudflare Worker (API REST)
+
+El Cloudflare Worker implementa una API RESTful con múltiples endpoints para las funcionalidades requeridas. Es un Worker de fondo (no está vinculado a una ruta pública de sitio web, sino pensado para ser llamado vía HTTP API, por ejemplo desde aplicaciones clientes, Postman o el servicio de WhatsApp). Se puede estructurar el código en módulos usando un router (por ejemplo, la librería Hono para routing en Workers) para organizar las distintas rutas. A continuación, se describen las funciones de este servicio:
+
+Registro de Contribuyentes y OTP vía WhatsApp
+
+Registro (POST /api/register): Permite registrar a un nuevo contribuyente en el sistema. El cliente envía en el cuerpo JSON los datos necesarios:
+
+rut: RUT del contribuyente (incluyendo dígito verificador, e.g. "12345678-9").
+
+password: Contraseña deseada para nuestra aplicación (se almacenará hasheada en D1).
+
+clave_sii: Clave secreta del SII (almacenada en texto plano en D1, ya que el sistema la usará para autenticarse automáticamente en el SII en segundo plano).
+
+telefono: Número de WhatsApp del usuario (incluyendo código de país, e.g. +569XXXXXXXX).
+
+Al registrarse, el Worker realiza las acciones:
+
+Crear usuario en D1: inserta un nuevo registro en la tabla de contribuyentes con el RUT (clave primaria), la contraseña hasheada (p.ej. con bcrypt) y la demás información. Marca al usuario como no verificado inicialmente.
+
+Generar OTP: crea un código numérico aleatorio de 6 dígitos para verificación (One-Time Password).
+
+Almacenar OTP en D1: guarda el código OTP en la tabla otp, asociado al RUT o teléfono, con timestamp de expiración (por ejemplo 5 minutos futuro).
+
+Notificar vía WhatsApp: Invoca al servicio de WhatsApp para enviar el código al número del usuario. Esto puede hacerse de dos modos:
+
+Llamando un endpoint expuesto por el servicio Node (por ejemplo POST /send-otp) con el número y código en JSON, para que el Node use whatsapp-web.js y envíe el mensaje de WhatsApp.
+
+O insertando un mensaje en una Cloudflare Queue específica de OTP, que el servicio Node podría estar consultando como pull consumer
+developers.cloudflare.com
+. Una implementación sencilla es exponer el endpoint y suponer que el Node es accesible vía HTTP interno.
+
+Tras estos pasos, el endpoint responde con un resultado de registro (por ejemplo, {"message":"Usuario registrado, OTP enviado"}) y queda a la espera de la verificación OTP.
+
+Verificación OTP (POST /api/verify-otp): Una vez el usuario recibe el código OTP por WhatsApp, lo ingresa en la aplicación cliente para verificar su teléfono. Este endpoint recibe el rut (o teléfono) y el codigo OTP ingresado. El Worker comprueba en la tabla otp si existe un código válido para ese usuario:
+
+Si coincide y no ha expirado, marca al usuario como verificado (actualiza el campo verified en la tabla de contribuyentes) y elimina/invalida el registro OTP usado. En respuesta puede indicar éxito de la verificación.
+
+Si el código es incorrecto o expiró, responde con error apropiado (código 401 o 400 indicando verificación fallida).
+
+A partir de aquí el usuario ya puede iniciar sesión. (El OTP aquí se usa solo para verificación inicial del teléfono, pero podría reutilizarse en futuros flujos si se desea 2FA al login.)
+
+Autenticación y Control de Sesiones (Workers KV)
+
+Login (POST /api/login): Para autenticarse en la API, el usuario provee su rut y password (la de la aplicación, no la del SII). El Worker valida las credenciales consultando la tabla de contribuyentes en D1:
+
+Si son válidas (existe el rut y coincide el hash de password), se genera un token de sesión (puede ser un UUID aleatorio o un JWT firmado). Este token representará la sesión activa del usuario.
+
+El token se almacena en Cloudflare Workers KV con la clave = token y valor = rut del usuario (y opcionalmente algunos metadatos como timestamp). KV es un almacén key-value distribuido globalmente y de lectura rápida, ideal para sesiones y caché
+developers.cloudflare.com
+developers.cloudflare.com
+. Cada escritura en KV se replica en centros de datos centrales y se sirve desde la caché más cercana a futuros lectores
+developers.cloudflare.com
+. Aunque KV es eventualmente consistente (propagación ~60s)
+developers.cloudflare.com
+, en este caso está bien: la sesión se usará típicamente desde la misma región poco después de login.
+
+Se devuelve el token al cliente (por ejemplo en un header Authorization o en el body JSON). Este token debe presentarse en las siguientes llamadas protegidas.
+
+Autenticación en endpoints: Los endpoints sensibles (consultas de datos SII, subida de contratos, preguntas, etc.) requerirán un token válido. El Worker implementa un middleware de autenticación que:
+
+Lee el token del header Authorization o cookie.
+
+Busca la clave en Workers KV. Si existe y no ha expirado, considera autenticado al usuario y extrae su identificador (RUT).
+
+Para eficiencia, las sesiones podrían tener expiración (p.ej. 24h) manejada por la app (KV no soporta TTL exacto por clave, habría que manejar expiración manualmente
+developers.cloudflare.com
+). También se podría almacenar la sesión en D1, pero KV ofrece lectura muy rápida desde el edge global.
+
+Si el token no es válido, devuelve 401.
+
+Al usar KV para sesiones, logramos escalabilidad en lecturas (muchas validaciones rápidas) sin golpear la base de datos cada vez
+developers.cloudflare.com
+.
+
+Integración con API Gateway del SII (RCV Ventas/Compras)
+
+Uno de los núcleos del sistema es obtener y mantener actualizada la información tributaria del Registro de Compras y Ventas (RCV) para cada contribuyente, a través de la API Gateway publicada por el SII. Según la especificación (ver YAML), los endpoints relevantes son:
+
+Resumen de Ventas: Retorna, para un periodo tributario dado, un resumen agregado de los documentos de venta emitidos (por tipo de documento). Endpoint: /api/v1/sii/rcv/ventas/resumen/{emisor}/{periodo} (método POST). Requiere autenticación (enviar en el body JSON el RUT y clave SII del usuario). El resultado incluye una lista de tipos de documentos con montos totales por tipo.
+
+Detalle de Ventas: Retorna el listado detallado de documentos de venta emitidos en un período. Endpoint: /api/v1/sii/rcv/ventas/detalle/{emisor}/{periodo}/{dte} (POST). Permite filtrar por tipo de documento (dte); si se usa dte=0 junto con tipo rcv_csv (ver YAML), trae todos los tipos a la vez, lo cual es recomendado para eficiencia. La respuesta es un array con cada documento (folio) y sus campos principales (RUT receptor, montos, fechas, estado recepción, etc.).
+
+Resumen de Compras: Resumen de documentos de compra recibidos (facturas de proveedores) en un período. Endpoint: /api/v1/sii/rcv/compras/resumen/{receptor}/{periodo}/{estado} (POST). Similar al resumen de ventas, pero desde la perspectiva de comprador. El parámetro estado permite consultar compras Pendientes de aceptación, Aceptadas o Rechazadas. Por simplicidad, se podría consultar solo las aceptadas (estado "0") o todas secuencialmente.
+
+Detalle de Compras: Detalle de documentos de compra recibidos. Endpoint: /api/v1/sii/rcv/compras/detalle/{receptor}/{periodo}/{dte} (POST). Análogo al detalle de ventas, lista cada factura recibida y sus datos. También soporta dte=0 para obtener todos los tipos en conjunto.
+
+Uso en el Worker: El Cloudflare Worker utiliza la librería fetch nativa para invocar estos endpoints externos. Dado que son APIs del SII, probablemente con CORS restringido, puede ser necesario configurarlas como no-cors o mediante un subdominio proxy. Asumiremos que se puede llamar directamente. Ejemplo de consulta de resumen de ventas:
+
+// Ejemplo: Obtener resumen ventas Sept 2023
+const url = `https://apigateway.sii.cl/api/v1/sii/rcv/ventas/resumen/${rut}/${periodo}`;
+const payload = { 
+  auth: { pass: { rut: rut, clave: claveSII } } 
+};
+const siiResponse = await fetch(url + '?formato=json&certificacion=0', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload)
+});
+if (siiResponse.status === 200) {
+  const data = await siiResponse.json();
+  // 'data' tendrá el arreglo de resumen de ventas
+}
+
+
+Almacenamiento local: Cuando la respuesta es 200 OK, el Worker parsea el JSON y guarda/actualiza los datos en la base D1:
+
+Los datos de resumen (ventas o compras) se guardan en sus tablas correspondientes (ventas_resumen, compras_resumen). Cada entrada corresponde a un tipo de documento en un período. Si ya existían datos previos del período, se pueden borrar y reemplazar para mantener consistencia.
+
+Los detalles se guardan en ventas_detalle o compras_detalle. Cada fila representa un documento individual (una factura, boleta, nota de crédito, etc.). La clave primaria es un ID autoincremental interno, y se pueden indexar por RUT+periodo para consultas rápidas. Se almacenan todos los campos relevantes (ver esquema de tablas más abajo).
+
+Manejo de cuotas y errores: La API del SII impone límites de frecuencia:
+
+Si se realizan demasiadas peticiones en poco tiempo, responde con HTTP 429 (Too Many Requests). En este caso, generalmente incluyen Retry-After indicando en cuántos segundos reintentar.
+
+Si se insiste en llamar pese al 429, pueden devolver HTTP 423 (Locked) bloqueando temporalmente el acceso. En estas respuestas suele venir un header X-Lock-Reset con un timestamp UNIX de cuándo se restablecerá el acceso
+developers.multiapi.cl
+.
+
+Credenciales inválidas resultan en 401 Unauthorized.
+
+El Worker implementa lógica de control de cuota:
+
+Tras cada llamada al SII, lee los headers. Si recibe 429 o 423, registra un log en D1 (tabla logs) con el evento, y respeta el tiempo indicado: por ejemplo, espera (mediante setTimeout asíncrono o, mejor, programa un mensaje en la Queue con retraso) hasta pasada la ventana para reintentar. Mientras tanto marca al usuario o tarea como "en espera por cuota".
+
+Para 423/429, podría también propagar un error controlado al cliente si la llamada fue bajo demanda, indicando "SII ocupado, intente más tarde".
+
+Un header importante es X-Lock-Reset: se convierte esa hora a fecha legible para log. También Retry-After en 429.
+
+Si 401, significa que la clave_sii almacenada es incorrecta o expiró (por ejemplo, si el usuario la cambió en SII). En ese caso, se devuelve al frontend un error que pida revalidar credenciales SII. También se podría invalidar la sesión o marcar el usuario como requeriendo actualización de clave.
+
+Frecuencia de actualización: Para mantener datos al día sin sobrecargar SII:
+
+Se puede hacer que la primera vez que el usuario consulta un recurso (ventas o compras) de un periodo, si no lo tenemos en D1 o está desactualizado, el Worker intente obtenerlo en vivo (salvo que recientemente ya actualizó vía cron).
+
+Adicionalmente, con la tarea programada (Cron) se actualizan periodos recientes automáticamente. Por ejemplo, cada noche el Cron Trigger despierta el Worker que encola actualizaciones para cada contribuyente:
+
+Actualizar el mes actual y quizás el mes anterior de ventas y compras.
+
+Actualizar algo como vencimientos o estados (por ejemplo, en compras, facturas pendientes de aceptar).
+
+Podría también refrescar las sesiones SII si hubiera tokens, pero en este caso usamos credenciales directamente en cada llamada.
+
+Gracias a la Cloudflare Queue, se pueden espaciar las llamadas. Por ejemplo, si hay 100 usuarios, en lugar de iterar 100 llamados seguidos (riesgo 429), se mandan mensajes a la cola y el consumidor los procesa con un leve delay entre cada uno. Se pueden configurar reintentos automáticos y delays en la cola mismo
+developers.cloudflare.com
+. Esto descarga la responsabilidad del Cron (que solo produce mensajes) y mejora la confiabilidad.
+
+En resumen, el Worker garantiza que los datos del SII se consulten de forma controlada y se guarden localmente. Así, las consultas de la app pueden responder rápido desde D1 sin pegarle siempre al SII.
+
+Endpoints de Consulta de Ventas y Compras (Datos locales)
+
+El servicio expone endpoints REST para que el cliente (o el agente de WhatsApp) consulten la información tributaria ya almacenada en D1. Por ejemplo:
+
+Consultar Resumen de Ventas (GET /api/ventas/resumen?periodo=YYYY-MM): Retorna al cliente el resumen de ventas de ese período desde la base local. Requiere autenticación. El Worker toma el rut de la sesión, y ejecuta una query SQL en D1, e.g.:
+
+SELECT dcvNombreTipoDoc, rsmnTipoDocInteger, rsmnTotDoc, rsmnMntNeto, rsmnMntIVA, rsmnMntTotal
+FROM ventas_resumen 
+WHERE rut = ? AND periodo = ?;
+
+
+Responde con JSON conteniendo la lista de tipos de documentos y montos. Por ejemplo:
+
+{
+  "rut": "76123456-7",
+  "periodo": "2023-09",
+  "ventas_resumen": [
+    {
+      "tipo_doc": "Factura Electrónica",
+      "codigo_tipo": 33,
+      "cantidad_docs": 5,
+      "monto_neto": 500000,
+      "monto_iva": 95000,
+      "monto_total": 595000
+    },
+    {
+      "tipo_doc": "Nota de Crédito Electrónica",
+      "codigo_tipo": 61,
+      "cantidad_docs": 1,
+      "monto_neto": -100000,
+      "monto_iva": -19000,
+      "monto_total": -119000
+    }
+  ]
+}
+
+
+(Los valores son ilustrativos; en la base se podrían guardar notas de crédito como montos positivos separados, pero para fines de respuesta al usuario quizás se sumen/resten según el tipo.)
+
+Consultar Detalle de Ventas (GET /api/ventas/detalle?periodo=YYYY-MM&tipo=33): Retorna los documentos de venta emitidos del tipo especificado (por ejemplo, facturas) en el periodo dado. Si tipo no se provee, podría devolver todos. La respuesta incluye cada documento con sus campos (folio, fecha, cliente, montos, etc.). Esto permite al usuario ver p.ej. todas sus facturas de cierto mes. Similarmente hay:
+
+GET /api/compras/resumen?... – resumen de compras locales.
+
+GET /api/compras/detalle?... – detalle de documentos recibidos.
+
+Estos endpoints no consultan al SII en tiempo real, sino que leen los datos de D1, por rendimiento. Si se detecta que falta información (por ejemplo, el usuario consulta un período muy antiguo que nunca se cargó), el sistema podría desencadenar una actualización en tiempo real antes de responder (o responder 202 Aceptado y procesar en segundo plano informando al usuario luego).
+
+Gestión de Documentos Contractuales en PDF (R2, extracción de texto)
+
+El sistema permite almacenar contratos en PDF por contribuyente y luego realizar consultas QA sobre ellos. El flujo es:
+
+Subir contrato (POST /api/contratos): Endpoint autenticado para que el usuario adjunte un archivo PDF de un contrato. Se espera una petición HTTP multi-part/form-data con un campo de archivo (por ejemplo file). El Worker recibe el archivo (usando request.formData() en el Worker) y lo procesa:
+
+Almacenamiento en R2: El Worker tiene vinculado un bucket R2 (por ejemplo llamado CONTRATOS_BUCKET). Copia el stream/binario del PDF directamente a R2 usando la API de R2 (binding env.CONTRATOS_BUCKET.put(key, fileStream)). El key puede ser generado (p.ej. rut/contrato-{id}.pdf). R2 almacenará el PDF de manera durable.
+
+Registrar metadatos en D1: Se inserta un registro en la tabla contratos con el rut del usuario, nombre del archivo (u otra identificación), y fecha de subida. Se obtiene un contrato_id (autonumérico) para ese documento.
+
+Extracción de texto: El Worker procede a extraer el texto del PDF. Para ello, puede integrarse una librería de parsing de PDF (por ejemplo pdf.js o pdf-parse) que funcione en entornos Workers (pure JS). Dado que los Workers tienen límite de CPU por request, si el PDF es muy grande, esta operación podría tardar. Para no bloquear la respuesta al usuario, hay dos opciones:
+
+Síncrono con respuesta diferida: El Worker extrae el texto inmediatamente dentro de esta misma invocación antes de responder, y luego inicia la generación de embeddings. Esto simplifica el flujo (cuando la API responde, ya todo está indexado). Pero para PDFs muy grandes podría acercarse al límite de 50ms CPU de Workers. Con textos moderados (unos pocos cientos de páginas), podría ser manejable ya que gran parte es I/O.
+
+Asíncrono con Queue: El Worker podría encolar una tarea de procesamiento de contrato en Cloudflare Queues y responder inmediatamente con algo como 202 Accepted + { contrato_id: X, status: "processing" }. Un consumidor (el mismo Worker configurado con un handler queue() para la cola de contratos) tomaría el mensaje y haría la extracción y embeddings fuera del flujo de request. Para simplificar suposiciones, consideremos la opción síncrona para ahora, dado que la pregunta no enfatiza el async aquí.
+
+Generar embeddings (Vectorize): Una vez obtenido el texto del contrato, el Worker lo divide en fragmentos (p.ej. por párrafos o por trozos de N caracteres) para manejarlos mejor. Cada fragmento de texto se envía al modelo de embeddings de Workers AI @cf/baai/bge-base-en-v1.5 para obtener su vector
+developers.cloudflare.com
+. Este modelo transforma texto en un vector de 768 números en embed space. El Worker tiene que llamar env.AI.run() con el modelo y el texto:
+
+const embeddings = await env.AI.run("@cf/baai/bge-base-en-v1.5", { text: fragment });
+const vector = embeddings.data[0];  // array de 768 floats
+
+
+Después, almacena este vector en la base de vectores Vectorize de Cloudflare. Antes, se debe haber creado un índice vectorial (p.ej. contratos_index) y asociado al Worker (via Wrangler toml/json). La inserción se hace con:
+
+await env.CONTRATOS_INDEX.upsert([
+  { id: vectorId, values: vector, metadata: { rut: userRut, contratoId: contrato_id, content: fragment } }
+]);
+
+
+Aquí vectorId puede ser, por ejemplo, el ID autoincremental de un registro en D1 que almacenamos para este fragmento (ver más abajo). También incluimos metadatos útiles: el rut del dueño, el contrato al que pertenece, e incluso el texto original del fragmento para no tener que buscarlo luego. (Alternativamente, se puede guardar el fragmento en D1 y solo referenciarlo por ID en Vectorize).
+
+Almacenar fragmentos en D1: Paralelamente a insertar en Vectorize, se pueden almacenar los fragmentos en la tabla embeddings de D1, con campos: contrato_id, texto del fragmento y (opcional) alguna referencia. Por ejemplo, insertamos cada fragmento y obtenemos su id en D1, usando ese id como vectorId en Vectorize
+developers.cloudflare.com
+developers.cloudflare.com
+. Esto permite luego recuperar el texto fácilmente dado un vector resultante de la búsqueda. (En el caso de usar metadata con texto en Vectorize, esto sería opcional).
+
+Tras completar estos pasos, el contrato está indexado para búsqueda semántica. El endpoint puede responder algo como:
+
+{ "contrato_id": 42, "message": "Contrato almacenado y procesado exitosamente." }
+
+
+(O simplemente 201 Created sin body). Si se optó por proceso asíncrono, aquí solo confirmaría recepción y habría otro mecanismo para señalar finalización (por simplicidad, supongamos síncrono/rápido).
+
+Seguridad: Los archivos PDF en R2 podrían estar protegidos con Access Policy o simplemente tener nombres no adivinables. No se exponen públicamente; el acceso sería solo a través del Worker si se quisiera descargar (no requerido en este caso). R2 en plan free no cobra egress hacia Workers, así que la extracción de texto no incurrirá en costos
+developers.cloudflare.com
+.
+
+Workers AI Embeddings en free tier: Workers AI cobra por uso de modelo (~$0.067 por millón de tokens para el modelo BGE base
+developers.cloudflare.com
+). En la capa gratuita podemos asumir volúmenes bajos de texto (unos cuantos contratos) que implican costo mínimo. Alternativamente, se podría integrar un modelo de embedding open-source en el propio Worker, pero usar Workers AI simplifica y es escalable.
+
+Consulta RAG: Preguntas y Respuestas sobre Datos Locales y Contratos
+
+Este es el componente “inteligente” del sistema: permitir a los usuarios hacer preguntas en lenguaje natural, ya sea sobre sus datos tributarios o sobre el contenido de sus contratos, y obtener respuestas útiles. Se implementa un endpoint de Question Answering con apoyatura en nuestros datos (Retrieval-Augmented Generation).
+
+Endpoint de consulta conversacional (POST /api/ask o /api/preguntar): El cliente (o el servicio de WhatsApp a través del usuario) envía una pregunta en texto, por ejemplo:
+
+"¿Cuánto vendí en septiembre?"
+
+"¿Cuándo vence el F29 del IVA?"
+
+"¿Mi contrato con ACME sigue vigente?"
+
+El Worker autenticado recibe la pregunta y determina cómo responder:
+
+a) Preguntas sobre datos numéricos (ventas/compras): Si la pregunta parece referirse a montos o fechas de obligaciones tributarias, el sistema puede interpretarla y responder utilizando los datos estructurados:
+
+Ej: "¿cuánto vendí en septiembre?" -> El Worker puede parsear "septiembre" (ej. mapeo a periodo 2023-09, posiblemente usando librería de fechas o un simple diccionario mes->número y asumiendo año corriente o pregunta clarifica año). Luego consulta D1 (tabla ventas_resumen) sumando rsmnMntTotal de todos los tipos de documento de ese mes, o tomando directamente el total si se almacena pre-sumado. Responde con un mensaje estilo: "En septiembre de 2023 vendiste CLP 595.000 en total (5 documentos emitidos)".
+
+Ej: "¿cuándo vence el F29?" -> Esta es una pregunta de normativa tributaria (el Formulario 29 es la declaración de IVA mensual). Esta información podría ser estática: el F29 usualmente vence el día 12 del mes siguiente, salvo cambios. Podemos tener esta regla codificada o almacenada en algún lugar (por ej., podríamos tener un documento de conocimiento general indexado en Vectorize también). Para este caso, el sistema podría simplemente responder con una frase fija: "El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo." Dado que no proviene de datos del usuario, es más un conocimiento estático; podríamos mantener un pequeño repositorio de FAQs o reglas si fuera necesario. Incluso podríamos agregar este contenido como un "contrato" o documento en Vectorize para que el pipeline RAG lo cubra.
+
+Para identificar estas preguntas sin usar NLP complejo, podemos usar palabras clave. Por ejemplo, si la pregunta contiene "vendí" o "compré" y un periodo/mes, la clasificamos como consulta de ventas/compras. Si contiene "F29" (o "vencer", "vence"), la clasificamos como consulta de normativa. Este enrutamiento simple cubriría lo básico.
+
+b) Preguntas sobre contratos (RAG): Si la pregunta parece referirse a información que podría estar en los contratos subidos (palabras como "contrato", "cláusula", nombres de partes, etc.), se procede con un flujo de búsqueda semántica:
+
+Vectorizar la pregunta: El Worker usa el mismo modelo de embeddings (bge-base-en-v1.5) para convertir la pregunta en un vector del mismo espacio semántico
+developers.cloudflare.com
+.
+
+Buscar en Vectorize: Utiliza la API de Vectorize para hacer una búsqueda de los k vectores más similares en nuestro índice de contratos. Por ejemplo:
+
+const questionVector = (await env.AI.run("@cf/baai/bge-base-en-v1.5", { text: pregunta })).data[0];
+const results = await env.CONTRATOS_INDEX.query(questionVector, { topK: 3, filter: { metadata: { rut: userRut } } });
+
+
+Aquí filter asegura que solo consideremos vectores (fragmentos) del mismo usuario (rut)
+developers.cloudflare.com
+. El resultado results.matches contendrá hasta 3 candidatos con mayor similitud coseno, cada uno con su id (el id que usamos al insertar, que corresponde al fragmento en D1) y score.
+
+Recuperar texto de fragmentos: Con los IDs obtenidos, consultamos D1 para obtener el contenido de esos fragmentos (a menos que ya lo tengamos en results.metadata.content). Por ejemplo:
+
+SELECT content FROM embeddings WHERE id IN (?, ?, ?);
+
+
+Esto nos da 1 a 3 trozos de texto relevantes provenientes de los contratos. Por ejemplo, si la pregunta era "¿Mi contrato con ACME sigue vigente?", quizás recuperemos un fragmento que dice "El contrato estará vigente hasta el 31 de diciembre de 2023." y otro que menciona la cláusula de renovación.
+
+Generar respuesta con LLM: Se construye un prompt para un modelo de lenguaje (ej. Llama 2 8B instruct o similar en Workers AI). Incrustamos el contexto de los documentos seguido de la pregunta, indicando al modelo que use ese contexto para responder
+developers.cloudflare.com
+developers.cloudflare.com
+. Por ejemplo:
+
+const context = fragments.map(t => "- " + t).join("\n");
+const systemMsg = "Eres un asistente que responde preguntas usando el contexto proporcionado. Si el contexto es relevante, úsalo en la respuesta.";
+const userMsg = pregunta;
+const aiResponse = await env.AI.run("@cf/meta/llama-3-8b-instruct", {
+  messages: [
+    { role: "system", content: `Contexto:\n${context}` },
+    { role: "system", content: systemMsg },
+    { role: "user", content: userMsg }
+  ]
+});
+const answer = aiResponse.response;  // texto de respuesta generado
+
+
+En la práctica, Workers AI puede devolver la respuesta en aiResponse.response o un objeto con más detalles; adaptamos según la librería. El modelo producirá algo como: "Tu contrato con ACME vence el 31 de diciembre de 2023." en base al fragmento encontrado. Nota: Si la pregunta no tiene respuesta en los datos (p. ej. pregunta personal fuera de contexto), el modelo podría decir que no encontró información. Podemos manejar ese caso detectando si results.matches vino vacío (score bajo) y contestar "No encontré esa información en tus contratos.".
+
+Responder al cliente: El endpoint devuelve un JSON con la respuesta generada, por ejemplo { "respuesta": "Tu contrato con ACME vence el 31 de diciembre de 2023." }. En el caso del agente de WhatsApp, el servicio Node simplemente enviará esta cadena al usuario.
+
+Este enfoque RAG se basa en prácticas recomendadas de Cloudflare Workers AI
+developers.cloudflare.com
+developers.cloudflare.com
+: embeddear datos propios, consultarlos, y pasar contexto relevante al modelo generativo para una respuesta final más precisa y con información actualizada que el modelo por sí solo no conocía.
+
+Mantenimiento de contexto de conversaciones: Dado que guardamos todas las interacciones en la tabla messages, podríamos enriquecer la lógica para manejar seguimientos. Ejemplo: Usuario pregunta "¿cuánto vendí en septiembre?" (sistema responde), luego pregunta "¿y en octubre?". La segunda pregunta no menciona explícitamente "ventas", pero como es una conversación, podemos asumir continuidad. Para lograrlo, el servicio Node (o el Worker) puede buscar los últimos mensajes de ese usuario y, si la nueva pregunta es breve o referencial, concatenar el contexto previo. Incluso podríamos enviar al LLM los últimos 1-2 QA como contexto adicional: "Pregunta anterior: ... Respuesta: ... Pregunta actual: ..." para que entienda la referencia "y en octubre". Esto sería un nivel extra de inteligencia conversacional. Por simplicidad, podemos anotar que se deja espacio para ello, pero el MVP se enfoca en responder pregunta a pregunta independientemente, a menos que el cliente (WhatsApp) lo maneje.
+
+Registro de Logs y Errores
+
+El Worker registra en la tabla logs eventos importantes para auditoría:
+
+Cada tarea de cron/cola iniciada y terminada (e.g. "Cron ejecutado - actualizando RCV Sep 2023 para RUT X").
+
+Errores en llamadas SII (429/423 incluyendo los tiempos de espera recibidos).
+
+Errores de Workers AI o Vectorize (por ejemplo, si falla la inserción de vector, etc.).
+
+Posibles incidentes de seguridad (login fallido, token inválido, etc.).
+
+Estos logs permiten diagnosticar problemas en la capa gratuita (donde quizá no tengamos Logging persistente a otro lugar). D1 sirve de bitácora.
+
+Servicio Pasarela WhatsApp (Node.js + whatsapp-web.js)
+
+El segundo servicio es un Node.js standalone que actúa como cliente de WhatsApp y puente con el Worker. Se puede implementar como una pequeña aplicación Express (para exponer algún endpoint para OTP) y lógica interna con whatsapp-web.js para mensajes.
+
+Tecnologías:
+
+whatsapp-web.js: Biblioteca que automatiza WhatsApp Web usando Puppeteer. Al iniciarse, abre una sesión de WhatsApp Web y requiere escanear un QR con la cuenta de WhatsApp que se usará como bot. Una vez iniciada, puede enviar y recibir mensajes mediante la API que provee
+github.com
+. Nota: Usar esta lib no es oficialmente soportado por WhatsApp, pero muchos proyectos la emplean con éxito (asumiendo bajo volumen y comportamiento humano).
+
+Express (o Fastify) Server: para manejar una ruta de recepción de peticiones HTTP si es necesaria (p.ej. para OTP). Alternativamente, podría no usar HTTP para OTP si adoptamos la idea de pull consumer de Queue, pero la implementación más simple es exponer un pequeño endpoint.
+
+Envío de OTP por WhatsApp
+
+Cuando el Worker quiere enviar un OTP, realiza una llamada HTTP al Node. Supongamos que el Node expone POST /send-otp esperando un JSON { "telefono": "...", "codigo": "..." }. La implementación sería:
+
+app.post('/send-otp', (req, res) => {
+  const { telefono, codigo } = req.body;
+  whatsappClient.sendMessage(telefono, `Su código OTP es: ${codigo}`).then(() => {
+    res.json({ status: "enviado" });
+  }).catch(err => {
+    console.error("Error enviando OTP:", err);
+    res.status(500).json({ status: "error", error: err.toString() });
+  });
+});
+
+
+Aquí whatsappClient es una instancia inicializada de Client de whatsapp-web.js. Esta librería permite enviar mensajes usando client.sendMessage(chatId, message) donde chatId para un número de teléfono es "<numero>@c.us" (e.g. +56911111111@c.us). Podríamos necesitar formatear el número a ese ID.
+
+Una vez configurado, el OTP llegará al WhatsApp del usuario como un mensaje desde la cuenta del bot.
+
+Este endpoint (o un mecanismo alterno) debería ser llamado en el flujo de registro explicado antes. Si por alguna razón no fuera posible exponer el Node a internet (por ser un servicio on-premise), podríamos haber optado por la estrategia de que el Node lea la tabla OTP en D1 periódicamente para encontrar códigos no enviados. Sin embargo, eso introduce latencia; lo más directo es permitir la llamada saliente del Worker al Node (por ejemplo, desplegando el Node en un entorno con una URL pública o al menos accesible desde el Worker).
+
+Recepción y reenvío de mensajes de contribuyentes
+
+El microservicio Node se suscribe a los eventos de recepción de mensaje que provee whatsapp-web.js. Algo como:
+
+whatsappClient.on('message', msg => {
+  const from = msg.from;       // teléfono del remitente (e.g. 56911111111@c.us)
+  const body = msg.body;       // texto del mensaje
+  if (!msg.fromMe) {
+    // Es un mensaje entrante de un usuario
+    handleIncomingMessage(from, body);
+  }
+});
+
+
+En handleIncomingMessage, se implementa la lógica para procesar la consulta del usuario:
+
+Identificar al usuario: El from viene en formato <numero>@c.us. Se extrae el número de teléfono. Con ese número, buscamos en D1 el rut correspondiente (tabla de contribuyentes tiene teléfono). Si encontramos el usuario, bien; si no, podríamos responder con un mensaje fijo tipo "Usuario no registrado. Por favor regístrate en la plataforma." y finalizar.
+
+Enviar pregunta al Worker: Tenemos dos opciones:
+
+Hacer una petición HTTP al endpoint QA del Worker (/api/ask). Este endpoint requeriría autenticación; podemos generar un token de sesión especial para el bot, o mejor, el Node podría autenticarse usando credenciales del usuario. Puesto que sabemos el rut y tenemos su password hash, no podemos derivar la password. Pero podríamos hacer que el Node tenga privilegios internos: por ejemplo, un token de servicio o la capacidad de llamar a una ruta oculta en el Worker que no requiera auth pero valide de otro modo. La forma más limpia es que en la tabla de sesiones creemos una sesión permanente para el servicio WA por cada usuario una vez verificado. O más simple: Node llama a un endpoint específico solo accesible con una API key interna.
+
+Simplificando: Node realiza un POST /api/agent/message al Worker con un payload { "rut": "...", "message": "¿cuánto vendí en septiembre?" } y una cabecera de autorización predefinida (una API Key que el Worker valida). Así el Worker omite autenticar contra KV (o podemos implementar un token de sistema).
+
+El Worker al recibir esto:
+
+Busca el rut en la base y realiza la misma lógica que haría para un usuario logueado: determina si la pregunta es de ventas/compras o de contratos y genera la respuesta (como en el endpoint /api/ask).
+
+Registra en la tabla messages la pregunta recibida (sender=user) con timestamp.
+
+Registra también la respuesta generada (sender=agent).
+
+Devuelve la respuesta de texto en el body.
+
+Enviar la respuesta al usuario: El Node toma la respuesta devuelta por el Worker y usa whatsappClient.sendMessage(from, respuesta) para enviarla de vuelta al mismo chat de donde vino la pregunta. Por ejemplo, si el usuario preguntó "¿cuánto vendí en septiembre?", el bot responderá "En septiembre de 2023 vendiste CLP 595.000 en total.".
+
+Contexto conversacional: Después de enviar la respuesta, el Node puede opcionalmente guardar el mensaje enviado en la base de datos. En nuestro diseño, mejor centralizar eso: ya hicimos que el Worker lo guardara al generar la respuesta. Sin embargo, podríamos también registrar a nivel Node, pero duplicaría. Confiaremos en el log que hizo el Worker para tener la conversacion.
+
+Si quisiéramos que Node usara contexto para resolver la intención, podría, antes de llamar al Worker, revisar la pregunta y la previa: p.ej. ve que la anterior pregunta del mismo usuario almacenada en D1 fue "¿cuánto vendí en septiembre?" y la nueva es "¿y en octubre?". Node podría traducir "¿y en octubre?" a "¿cuánto vendí en octubre?" automáticamente y pasarlo así. Este tipo de anaphora resolution simple se puede implementar con heurísticas en Node utilizando el historial messages. Es un posible mejora.
+
+En resumen, el servicio Node es un agente conversacional que transforma mensajes de WhatsApp en llamadas HTTP al cerebro (el Worker) y luego envía de regreso la contestación al usuario por WhatsApp. Esto permite a los contribuyentes interactuar vía chat de manera muy natural para obtener su información tributaria o de contratos, sin tener que usar directamente la API.
+
+Nota: Dado que whatsapp-web.js actúa como un cliente real de WhatsApp Web, los mensajes enviados y recibidos aparecerán en la interfaz de WhatsApp de la cuenta del bot. Conviene usar una cuenta dedicada (por ejemplo, un número de empresa). Existe un riesgo de bloqueo si se envían muchos mensajes automatizados; para mitigarlo, el volumen esperado es bajo (solo OTP y respuestas bajo demanda de un número limitado de usuarios, debería asemejarse a un uso humano). Aun así, se deben evitar patrones que WhatsApp detecte como spam.
+
+Base de Datos Cloudflare D1: Esquema y Semillas
+
+A continuación se presenta el esquema SQL completo de la base de datos D1, incluyendo todas las tablas mencionadas, y un set de datos de ejemplo (seeds) para ilustrar su uso.
+
+Cada tabla almacena información específica:
+
+contributors: Datos de los contribuyentes registrados (RUT, password, clave SII, teléfono, verificación).
+
+otp: Códigos OTP generados y pendientes de verificación.
+
+sessions: Sesiones activas (token) – aunque usamos KV para validación en runtime, tenerlas en D1 puede servir para invalidar o monitorear.
+
+logs: Eventos de registro del sistema (operaciones de cron, errores de SII, etc).
+
+messages: Historial de mensajes de conversaciones por usuario (quién envió qué y cuándo).
+
+ventas_resumen: Resumen RCV de ventas por período (agregado por tipo de documento).
+
+ventas_detalle: Detalle de cada documento de venta emitido (cada factura/boleta, etc.).
+
+compras_resumen: Resumen RCV de compras por período.
+
+compras_detalle: Detalle de cada documento de compra recibido.
+
+contratos: Metadatos de contratos PDF subidos (por usuario).
+
+embeddings: Fragmentos de texto de contratos y otros documentos indexados, con referencias para búsquedas semánticas.
+
+-- schema.sql: Definición de tablas D1
+
+-- Tabla de contribuyentes (usuarios)
+CREATE TABLE contributors (
+    rut TEXT PRIMARY KEY,             -- RUT del contribuyente (ej: '76123456-7')
+    password_hash TEXT NOT NULL,      -- Contraseña de nuestra app (hasheada, ej. bcrypt)
+    clave_sii TEXT NOT NULL,          -- Clave del SII en texto plano (para uso interno)
+    telefono TEXT NOT NULL,           -- Número de teléfono (WhatsApp) del usuario, formato +56XXXX
+    verified INTEGER DEFAULT 0,       -- Indicador de teléfono verificado (0/1)
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de códigos OTP pendientes de verificación
+CREATE TABLE otp (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    code TEXT NOT NULL,               -- código OTP de 6 dígitos
+    expires_at INTEGER NOT NULL       -- timestamp Unix de expiración
+);
+
+-- Tabla de sesiones (opcional, complementa KV)
+CREATE TABLE sessions (
+    token TEXT PRIMARY KEY,           -- token de sesión (ej: UUID o aleatorio)
+    rut TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+-- Tabla de logs de eventos
+CREATE TABLE logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT,                         -- rut relacionado al evento (puede ser NULL para eventos globales)
+    type TEXT,                        -- tipo de evento (e.g., 'SII_FETCH', 'ERROR', 'CRON')
+    message TEXT,                     -- descripción o detalle del evento
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de mensajes (conversación vía WhatsApp)
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    sender TEXT NOT NULL,             -- 'user' o 'agent' indicando quién envió el mensaje
+    content TEXT NOT NULL,            -- texto del mensaje
+    timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla Resumen de Ventas (RCV) por período
+CREATE TABLE ventas_resumen (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    periodo TEXT NOT NULL,            -- período en formato YYYY-MM (ej: '2023-09')
+    dcvCodigo INTEGER,
+    dcvNombreTipoDoc TEXT,
+    dcvOperacion TEXT,
+    dcvTipoIngresoDoc TEXT,
+    rsmnCodigo INTEGER,
+    rsmnEstadoContab TEXT,
+    rsmnIVAUsoComun INTEGER,
+    rsmnLink INTEGER,                -- boolean 0/1
+    rsmnMntExe INTEGER,
+    rsmnMntIVA INTEGER,
+    rsmnMntIVANoRec INTEGER,
+    rsmnMntNeto INTEGER,
+    rsmnMntTotal INTEGER,
+    rsmnTipoDocInteger INTEGER,
+    rsmnTotDoc INTEGER,
+    rsmnTotalRutEmisor TEXT
+);
+
+-- Tabla Detalle de Ventas (RCV) documentos individuales
+CREATE TABLE ventas_detalle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    periodo TEXT NOT NULL,
+    cambiarTipoTran INTEGER,         -- boolean 0/1
+    dcvCodigo INTEGER,
+    dcvEstadoContab TEXT,
+    descTipoTransaccion TEXT,
+    detAnulado TEXT,
+    detCdgSIISucur INTEGER,
+    detCodigo INTEGER,
+    detCredEc INTEGER,
+    detDepEnvase INTEGER,
+    detDvDoc TEXT,
+    detEmisorNota INTEGER,
+    detEventoReceptor TEXT,
+    detEventoReceptorLeyenda TEXT,
+    detExpNacionalidad TEXT,
+    detExpNumId TEXT,
+    detFchDoc TEXT,
+    detFecAcuse TEXT,
+    detFecRecepcion TEXT,
+    detFecReclamado TEXT,
+    detFolioDocRef TEXT,
+    detIVAFueraPlazo INTEGER,
+    detIVANoRetenido INTEGER,
+    detIVAPropio INTEGER,
+    detIVARetParcial INTEGER,
+    detIVARetTotal INTEGER,
+    detIVATerceros INTEGER,
+    detIVAUsoComun TEXT,
+    detImpVehiculo TEXT,
+    detIndServicio INTEGER,
+    detIndSinCosto INTEGER,
+    detLey18211 INTEGER,
+    detLiqDvEmisor TEXT,
+    detLiqRutEmisor INTEGER,
+    detLiqValComExe INTEGER,
+    detLiqValComIVA INTEGER,
+    detLiqValComNeto INTEGER,
+    detMntActFijo TEXT,
+    detMntCodNoRec TEXT,
+    detMntExe INTEGER,
+    detMntIVA INTEGER,
+    detMntIVAActFijo TEXT,
+    detMntIVANoRec TEXT,
+    detMntNeto INTEGER,
+    detMntNoFact INTEGER,
+    detMntPeriodo INTEGER,
+    detMntSinCredito TEXT,
+    detMntTotal INTEGER,
+    detNroDoc INTEGER,
+    detNumInt TEXT,
+    detPcarga INTEGER,
+    detPsjInt INTEGER,
+    detPsjNac INTEGER,
+    detRutDoc INTEGER,
+    detRznSoc TEXT,
+    detTabCigarrillos TEXT,
+    detTabElaborado TEXT,
+    detTabPuros TEXT,
+    detTasaImp TEXT,
+    detTipoDoc INTEGER,
+    detTipoDocRef INTEGER,
+    detTipoTransaccion TEXT,
+    detTpoImp TEXT,
+    dhdrCodigo INTEGER,
+    totalDinrMontoIVANoR TEXT,
+    totalDtoiMontoImp INTEGER
+);
+
+-- Tabla Resumen de Compras (RCV)
+CREATE TABLE compras_resumen (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    periodo TEXT NOT NULL,
+    dcvCodigo INTEGER,
+    dcvNombreTipoDoc TEXT,
+    dcvOperacion TEXT,
+    dcvTipoIngresoDoc TEXT,
+    rsmnCodigo INTEGER,
+    rsmnEstadoContab TEXT,
+    rsmnIVAUsoComun INTEGER,
+    rsmnLink INTEGER,
+    rsmnMntExe INTEGER,
+    rsmnMntIVA INTEGER,
+    rsmnMntIVANoRec INTEGER,
+    rsmnMntNeto INTEGER,
+    rsmnMntTotal INTEGER,
+    rsmnTipoDocInteger INTEGER,
+    rsmnTotDoc INTEGER,
+    rsmnTotalRutEmisor TEXT
+);
+
+-- Tabla Detalle de Compras (RCV)
+CREATE TABLE compras_detalle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    periodo TEXT NOT NULL,
+    cambiarTipoTran INTEGER,
+    dcvCodigo INTEGER,
+    dcvEstadoContab TEXT,
+    descTipoTransaccion TEXT,
+    detAnulado TEXT,
+    detCdgSIISucur INTEGER,
+    detCodigo INTEGER,
+    detCredEc INTEGER,
+    detDepEnvase INTEGER,
+    detDvDoc TEXT,
+    detEmisorNota INTEGER,
+    detEventoReceptor TEXT,
+    detEventoReceptorLeyenda TEXT,
+    detExpNacionalidad TEXT,
+    detExpNumId TEXT,
+    detFchDoc TEXT,
+    detFecAcuse TEXT,
+    detFecRecepcion TEXT,
+    detFecReclamado TEXT,
+    detFolioDocRef TEXT,
+    detIVAFueraPlazo INTEGER,
+    detIVANoRetenido INTEGER,
+    detIVAPropio INTEGER,
+    detIVARetParcial INTEGER,
+    detIVARetTotal INTEGER,
+    detIVATerceros INTEGER,
+    detIVAUsoComun TEXT,
+    detImpVehiculo TEXT,
+    detIndServicio INTEGER,
+    detIndSinCosto INTEGER,
+    detLey18211 INTEGER,
+    detLiqDvEmisor TEXT,
+    detLiqRutEmisor INTEGER,
+    detLiqValComExe INTEGER,
+    detLiqValComIVA INTEGER,
+    detLiqValComNeto INTEGER,
+    detMntActFijo TEXT,
+    detMntCodNoRec TEXT,
+    detMntExe INTEGER,
+    detMntIVA INTEGER,
+    detMntIVAActFijo TEXT,
+    detMntIVANoRec TEXT,
+    detMntNeto INTEGER,
+    detMntNoFact INTEGER,
+    detMntPeriodo INTEGER,
+    detMntSinCredito TEXT,
+    detMntTotal INTEGER,
+    detNroDoc INTEGER,
+    detNumInt TEXT,
+    detPcarga INTEGER,
+    detPsjInt INTEGER,
+    detPsjNac INTEGER,
+    detRutDoc INTEGER,
+    detRznSoc TEXT,
+    detTabCigarrillos TEXT,
+    detTabElaborado TEXT,
+    detTabPuros TEXT,
+    detTasaImp TEXT,
+    detTipoDoc INTEGER,
+    detTipoDocRef INTEGER,
+    detTipoTransaccion TEXT,
+    detTpoImp TEXT,
+    dhdrCodigo INTEGER,
+    totalDinrMontoIVANoR TEXT,
+    totalDtoiMontoImp INTEGER
+);
+
+-- Tabla de contratos PDF
+CREATE TABLE contratos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rut TEXT NOT NULL,
+    file_name TEXT NOT NULL,           -- nombre o identificador del archivo PDF en R2
+    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de embeddings (fragmentos de texto indexados con AI)
+CREATE TABLE embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contrato_id INTEGER NOT NULL,
+    content TEXT NOT NULL              -- contenido de texto del fragmento
+    -- (el vector no se almacena aquí, está en Vectorize; podríamos almacenar metadata adicional si se requiere)
+);
+
+
+Y aquí un ejemplo de seeds.sql con algunos datos simulados para ilustrar:
+
+-- seeds.sql: Datos de ejemplo en las tablas
+
+-- 1) Usuario de ejemplo
+INSERT INTO contributors (rut, password_hash, clave_sii, telefono, verified) VALUES
+('76123456-7', '$2b$10$K8...Fh' /*hash de "miclave123"*/, 'claveSII123', '+56911112222', 1);
+
+-- 2) OTP generado para registro (asumir expiración en epoch futuro)
+INSERT INTO otp (rut, code, expires_at) VALUES ('76123456-7', '123456', strftime('%s','now','+5 minutes'));
+
+-- 3) Sesión activa (token ficticio)
+INSERT INTO sessions (token, rut, created_at, expires_at) VALUES
+('SESSION123', '76123456-7', strftime('%s','now'), strftime('%s','now','+1 day'));
+
+-- 4) Logs de eventos
+INSERT INTO logs (rut, type, message) VALUES
+('76123456-7', 'CRON', 'Actualización diaria: RCV 2023-09 ventas y compras iniciada'),
+('76123456-7', 'ERROR', 'SII 429 Too Many Requests – Retry-After: 60s');
+
+-- 5) Mensajes de conversación de ejemplo
+INSERT INTO messages (rut, sender, content, timestamp) VALUES
+('76123456-7', 'user', '¿Cuánto vendí en septiembre?', '2025-09-15 10:00:00'),
+('76123456-7', 'agent', 'En septiembre de 2025 vendiste CLP 5.950.000.', '2025-09-15 10:00:02'),
+('76123456-7', 'user', '¿y en octubre?', '2025-09-15 10:01:00'),
+('76123456-7', 'agent', 'En octubre de 2025 vendiste CLP 6.120.000.', '2025-09-15 10:01:05');
+
+-- 6) Datos de Resumen de Ventas (septiembre 2023) – 2 tipos de documento
+INSERT INTO ventas_resumen (rut, periodo, dcvCodigo, dcvNombreTipoDoc, dcvOperacion, dcvTipoIngresoDoc,
+  rsmnCodigo, rsmnEstadoContab, rsmnIVAUsoComun, rsmnLink, rsmnMntExe, rsmnMntIVA, rsmnMntIVANoRec,
+  rsmnMntNeto, rsmnMntTotal, rsmnTipoDocInteger, rsmnTotDoc, rsmnTotalRutEmisor)
+VALUES
+('76123456-7', '2023-09', 1234, 'Factura Electrónica', NULL, 'DET_ELE',
+  1234, NULL, 0, 1, 0, 190, 0, 1000, 1190, 33, 1, NULL),
+('76123456-7', '2023-09', 1235, 'Nota de Crédito Electrónica', NULL, 'DET_ELE',
+  1235, NULL, 0, 1, 0, 19, 0, 100, 119, 61, 1, NULL);
+
+-- 7) Datos de Detalle de Ventas (septiembre 2023) – ejemplo de 1 factura y 1 nota de crédito
+INSERT INTO ventas_detalle (rut, periodo, cambiarTipoTran, dcvCodigo, dcvEstadoContab, descTipoTransaccion,
+  detAnulado, detCdgSIISucur, detCodigo, detCredEc, detDepEnvase, detDvDoc,
+  detEmisorNota, detEventoReceptor, detEventoReceptorLeyenda, detExpNacionalidad, detExpNumId,
+  detFchDoc, detFecAcuse, detFecRecepcion, detFecReclamado, detFolioDocRef,
+  detIVAFueraPlazo, detIVANoRetenido, detIVAPropio, detIVARetParcial, detIVARetTotal,
+  detIVATerceros, detIVAUsoComun, detImpVehiculo, detIndServicio, detIndSinCosto,
+  detLey18211, detLiqDvEmisor, detLiqRutEmisor, detLiqValComExe, detLiqValComIVA,
+  detLiqValComNeto, detMntActFijo, detMntCodNoRec, detMntExe, detMntIVA,
+  detMntIVAActFijo, detMntIVANoRec, detMntNeto, detMntNoFact, detMntPeriodo,
+  detMntSinCredito, detMntTotal, detNroDoc, detNumInt, detPcarga,
+  detPsjInt, detPsjNac, detRutDoc, detRznSoc, detTabCigarrillos,
+  detTabElaborado, detTabPuros, detTasaImp, detTipoDoc, detTipoDocRef,
+  detTipoTransaccion, detTpoImp, dhdrCodigo, totalDinrMontoIVANoR, totalDtoiMontoImp)
+VALUES
+-- Factura Electrónica
+('76123456-7', '2023-09', 0, 1234, NULL, 'Del Giro',
+  NULL, 0, 1234, 0, 0, '9',
+  0, NULL, NULL, NULL, NULL,
+  '01/09/2023', NULL, '02/09/2023 10:00:00', NULL, NULL,
+  0, 0, 0, 0, 0,
+  0, NULL, NULL, 0, 0,
+  0, NULL, 0, 0, 0,
+  0, NULL, NULL, 0, 190,
+  NULL, NULL, 1000, 0, 0,
+  NULL, 1190, 100, NULL, 201909,
+  0, 0, 22222222, 'Cliente XYZ', NULL,
+  NULL, NULL, '19', 33, 0,
+  NULL, NULL, 5000, NULL, 0),
+-- Nota de Crédito Electrónica
+('76123456-7', '2023-09', 0, 1235, NULL, 'Del Giro',
+  NULL, 0, 1235, 0, 0, ' ',
+  0, NULL, NULL, NULL, NULL,
+  '05/09/2023', NULL, '06/09/2023 08:30:00', NULL, NULL,
+  0, 0, 0, 0, 0,
+  0, NULL, NULL, 0, 0,
+  0, NULL, 0, 0, 0,
+  0, NULL, NULL, 0, 19,
+  NULL, NULL, 100, 0, 0,
+  NULL, 119, 50, NULL, 201909,
+  0, 0, 22222222, 'Cliente XYZ', NULL,
+  NULL, NULL, '19', 61, 0,
+  NULL, NULL, 5001, NULL, 0);
+
+-- 8) Resumen de Compras (septiembre 2023) – ejemplo 1 tipo
+INSERT INTO compras_resumen (rut, periodo, dcvCodigo, dcvNombreTipoDoc, dcvOperacion, dcvTipoIngresoDoc,
+  rsmnCodigo, rsmnEstadoContab, rsmnIVAUsoComun, rsmnLink, rsmnMntExe, rsmnMntIVA,
+  rsmnMntIVANoRec, rsmnMntNeto, rsmnMntTotal, rsmnTipoDocInteger, rsmnTotDoc, rsmnTotalRutEmisor)
+VALUES
+('76123456-7', '2023-09', 2234, 'Factura Electrónica', NULL, 'DET_ELE',
+  2234, NULL, 0, 1, 0, 152, 0, 800, 952, 33, 5, NULL);
+
+-- 9) Detalle de Compras (sept 2023) – ejemplo 1 factura de proveedor
+INSERT INTO compras_detalle (rut, periodo, cambiarTipoTran, dcvCodigo, dcvEstadoContab, descTipoTransaccion,
+  detAnulado, detCdgSIISucur, detCodigo, detCredEc, detDepEnvase, detDvDoc,
+  detEmisorNota, detEventoReceptor, detEventoReceptorLeyenda, detExpNacionalidad, detExpNumId,
+  detFchDoc, detFecAcuse, detFecRecepcion, detFecReclamado, detFolioDocRef,
+  detIVAFueraPlazo, detIVANoRetenido, detIVAPropio, detIVARetParcial, detIVARetTotal,
+  detIVATerceros, detIVAUsoComun, detImpVehiculo, detIndServicio, detIndSinCosto,
+  detLey18211, detLiqDvEmisor, detLiqRutEmisor, detLiqValComExe, detLiqValComIVA,
+  detLiqValComNeto, detMntActFijo, detMntCodNoRec, detMntExe, detMntIVA,
+  detMntIVAActFijo, detMntIVANoRec, detMntNeto, detMntNoFact, detMntPeriodo,
+  detMntSinCredito, detMntTotal, detNroDoc, detNumInt, detPcarga,
+  detPsjInt, detPsjNac, detRutDoc, detRznSoc, detTabCigarrillos,
+  detTabElaborado, detTabPuros, detTasaImp, detTipoDoc, detTipoDocRef,
+  detTipoTransaccion, detTpoImp, dhdrCodigo, totalDinrMontoIVANoR, totalDtoiMontoImp)
+VALUES
+('76123456-7', '2023-09', 0, 2234, NULL, 'Del Giro',
+  NULL, 0, 2234, 0, 0, 'K',
+  0, NULL, NULL, NULL, NULL,
+  '10/09/2023', NULL, '11/09/2023 09:00:00', NULL, NULL,
+  0, 0, 0, 0, 0,
+  0, NULL, NULL, 0, 0,
+  0, NULL, 0, 0, 0,
+  0, NULL, NULL, 0, 152,
+  NULL, NULL, 800, 0, 0,
+  NULL, 952, 321, NULL, 201909,
+  0, 0, 33444555, 'Proveedor ABC', NULL,
+  NULL, NULL, '19', 33, 0,
+  NULL, NULL, 6000, NULL, 0);
+
+-- 10) Contrato PDF de ejemplo
+INSERT INTO contratos (rut, file_name) VALUES 
+('76123456-7', 'Contrato_ACME.pdf');
+
+-- 11) Fragmentos embebidos de ejemplo (del contrato anterior)
+INSERT INTO embeddings (contrato_id, content) VALUES
+(1, 'El contrato estará vigente hasta el 31 de diciembre de 2023.'),
+(1, 'Las partes acuerdan que el servicio comenzará el 1 de enero de 2023.');
+
+
+(Los datos anteriores son simulados: por ejemplo, rut, montos, fechas. En un entorno real, los montos negativos de notas de crédito podrían manejarse de forma distinta. El objetivo es mostrar la estructura.)
+
+Al ejecutar estos seeds en la base D1, tendríamos por ejemplo un usuario registrado con una factura de venta y una nota de crédito en septiembre 2023, una compra registrada en ese mes, y un contrato cuyo texto indica la vigencia hasta cierta fecha, con sus embeddings generados.
+
+Colección Postman (Endpoints y Ejemplos)
+
+Para facilitar las pruebas, se puede armar una colección Postman con llamadas de ejemplo a los endpoints descritos. A continuación se listan las principales solicitudes incluidas en la colección, con sus métodos, rutas y ejemplos de request/response:
+
+Registro de usuario – POST /api/register
+Body (JSON):
+
+{
+  "rut": "76123456-7",
+  "password": "miclave123",
+  "clave_sii": "claveSII123",
+  "telefono": "+56911112222"
+}
+
+
+Response (201 Created):
+
+{ "message": "Usuario registrado, OTP enviado al WhatsApp +56 9 1111 2222" }
+
+
+(En este punto revisar el teléfono para el código OTP.)
+
+Verificación OTP – POST /api/verify-otp
+Body (JSON):
+
+{
+  "rut": "76123456-7",
+  "codigo": "123456"
+}
+
+
+Response (200 OK):
+
+{ "message": "Teléfono verificado exitosamente. Ya puedes iniciar sesión." }
+
+
+Login – POST /api/login
+Body (JSON):
+
+{
+  "rut": "76123456-7",
+  "password": "miclave123"
+}
+
+
+Response (200 OK):
+
+{ "token": "SESSION1234567890" }
+
+
+(Un token de sesión que deberá incluirse en adelante, por ejemplo en la cabecera Authorization: Bearer SESSION1234567890.)
+
+Consulta Resumen de Ventas – GET /api/ventas/resumen?periodo=2023-09
+Headers: Authorization: Bearer SESSION1234567890
+Response (200 OK):
+
+{
+  "rut": "76123456-7",
+  "periodo": "2023-09",
+  "ventas_resumen": [
+    {
+      "tipo_doc": "Factura Electrónica",
+      "codigo_tipo": 33,
+      "cantidad_docs": 1,
+      "monto_neto": 1000,
+      "monto_iva": 190,
+      "monto_total": 1190
+    },
+    {
+      "tipo_doc": "Nota de Crédito Electrónica",
+      "codigo_tipo": 61,
+      "cantidad_docs": 1,
+      "monto_neto": 100,
+      "monto_iva": 19,
+      "monto_total": 119
+    }
+  ]
+}
+
+
+(Estos valores corresponden a los seeds cargados arriba. En un caso real serían los obtenidos del SII.)
+
+Consulta Detalle de Ventas – GET /api/ventas/detalle?periodo=2023-09&tipo=33
+(Por defecto podríamos asumir tipo=33 Facturas)
+Response (200 OK) – ejemplo abreviado:
+
+{
+  "rut": "76123456-7",
+  "periodo": "2023-09",
+  "tipo_doc": 33,
+  "documentos": [
+    {
+      "folio": 100,
+      "fecha": "01/09/2023",
+      "cliente_rut": "22.222.222-2",
+      "cliente_nombre": "Cliente XYZ",
+      "monto_neto": 1000,
+      "monto_iva": 190,
+      "monto_total": 1190,
+      "estado_acuse": "Recibido",
+      "fecha_recepcion_sii": "02/09/2023 10:00:00"
+    }
+  ]
+}
+
+
+(Se listaría cada factura con los campos más relevantes. Aquí solo una factura de ejemplo.)
+
+Subir Contrato PDF – POST /api/contratos
+En Postman, se configura Body como form-data, con un campo file tipo File adjuntando un PDF.
+Headers: Authorization: Bearer ...
+Response (201 Created):
+
+{ "contrato_id": 1, "message": "Contrato almacenado y procesado exitosamente." }
+
+
+(El contrato_id asignado y confirmación. Internamente ya se extrajo texto y generaron embeddings.)
+
+Consulta RAG sobre contratos – POST /api/ask
+Headers: Authorization: Bearer ...
+Body (JSON):
+
+{ "question": "¿Mi contrato con ACME sigue vigente?" }
+
+
+Response (200 OK):
+
+{
+  "respuesta": "Según el contrato, la vigencia es hasta el 31 de diciembre de 2023."
+}
+
+
+(Aquí el sistema buscó en los embeddings del contrato subido, encontró la fecha de término y formuló la respuesta. Si la pregunta hubiese sido tributaria, habría respondido con datos de ventas/compras locales.)
+
+Mensaje del agente (vía WhatsApp) – Este caso se prueba mejor en vivo, pero podemos simularlo haciendo que el Node llame internamente. Por ejemplo:
+
+Usuario envía WhatsApp: "¿cuánto vendí en septiembre?"
+
+(Node recibe y hace POST /api/agent/message con rut y texto al Worker)
+
+Worker responde con JSON {"respuesta": "...vendiste CLP 595000..."}.
+
+Node envía ese texto por WhatsApp al usuario.
+
+En la colección Postman, podríamos incluir una petición POST /api/agent/message (protegida por API key) para simular un mensaje entrante:
+Body: { "rut": "76123456-7", "mensaje": "¿cuánto vendí en septiembre?" }
+Response: { "respuesta": "En septiembre de 2023 vendiste CLP 595.000." }
+(Esta petición en realidad la haría el microservicio Node, no un usuario final, por eso podría requerir una auth especial no pública.)
+
+Estas llamadas muestran el ciclo completo: registro + OTP, login, consultas de datos tributarios, carga de documentos y preguntas libres. La colección incluiría los ejemplos anteriores listos para ejecutar (ajustando token o datos según los resultados reales del registro).
+
+Instrucciones de Despliegue y Uso (README)
+
+En el repositorio del proyecto se incluiría un README con instrucciones detalladas para ejecutar y desplegar ambos servicios en la capa gratuita de Cloudflare. A continuación resumimos los pasos más importantes:
+
+Configuración Previa (Cloudflare):
+
+Crear una cuenta Cloudflare y acceder al dashboard.
+
+Cloudflare D1: Crear una base de datos D1 (por ejemplo llamada rcv_db). Anotar el database_id (UUID) y el database_name. Aplicar las migraciones del esquema (schema.sql) usando el comando Wrangler CLI npx wrangler d1 execute <database_name> --file=schema.sql. (Igualmente cargar seeds.sql si se desea datos de prueba).
+
+Cloudflare R2: Crear un bucket R2 (ej. contratos-bucket) para almacenar los PDFs. En wrangler.toml se añadirá un binding [r2_buckets] para permitir al Worker acceder a este bucket.
+
+Workers KV: Crear un namespace KV (ej. SESSIONS_KV) para sesiones. Vincular en wrangler.toml con [kv_namespaces].
+
+Cloudflare Vectorize: (Si no está ya activado, habilitar Vectorize beta en la cuenta). Crear un índice vectorial (e.g. contract_index) usando wrangler vectorize create contract_index --dimension 768. Vincularlo en wrangler.toml con [vectorize] (binding CONTRATOS_INDEX).
+
+Workers AI: Asegurarse de tener habilitado Workers AI en la cuenta. Esto puede requerir agregar ciertas claves de API en wrangler.toml o activar la integración (Cloudflare actualmente permite usar env.AI directamente en Workers). No se necesita API externa; Cloudflare manejará la inferencia internamente.
+
+Cloudflare Queues: Crear una cola (ej. sii-tasks) si se implementa la lógica de colas para extracciones SII. Vincular con [queues] en config, con un consumidor atado al Worker. Para WhatsApp OTP, si se decide usar cola, crear otra (ej. otp-send) y configurar Node como pull consumer (requiere una API Token con permisos).
+
+Variables de entorno: Configurar en wrangler.toml cualquier secret o env var necesaria, p.ej. SII_API_BASE si se abstrae la URL base, o una WHATSAPP_API_KEY para asegurar el endpoint interno del agente.
+
+Despliegue del Cloudflare Worker (Servicio Principal):
+
+Clonar el repositorio y ubicarse en la carpeta del servicio principal (por ej. /services/worker).
+
+Instalar dependencias (npm install).
+
+Configurar wrangler.toml con los bindings de D1, KV, R2, Vectorize creados en el paso 1. Por ejemplo:
+
+d1_databases = [
+  { binding = "DB", database_name = "rcv_db", database_id = "<uuid>" }
+]
+kv_namespaces = [
+  { binding = "SESSIONS_KV", id = "<kv_namespace_id>" }
+]
+r2_buckets = [
+  { binding = "CONTRACTS_BUCKET", bucket_name = "contratos-bucket" }
+]
+vectorize = [
+  { binding = "CONTRATOS_INDEX", index_name = "contract_index", id = "<vector_index_id>" }
+]
+
+
+Y habilitar Workers AI (generalmente ya disponible). Además, añadir:
+
+workers_dev = true
+
+
+para probar en dev subdomain.
+
+Ejecutar en desarrollo: npm run dev (que internamente puede correr wrangler dev). Esto levantará el Worker en <subdominio>.workers.dev para pruebas locales. Probar endpoints con curl o Postman según colección.
+
+Desplegar a producción: npm run deploy (que ejecuta wrangler publish). Esto publicará el Worker en la cuenta Cloudflare, obteniendo una URL pública (o se puede asignar a un dominio/ruta específico en Cloudflare, si se desea).
+
+Despliegue del servicio WhatsApp (Node.js):
+
+Ir a la carpeta /services/whatsapp (si está separado) e instalar deps (npm install).
+
+Configurar variables: en un archivo .env guardar las credenciales necesarias (en este caso, whatsapp-web.js no requiere token, pero generará una sesión de WhatsApp; opcionalmente se puede guardar/reusar la sesión). También si usamos la API interna con auth, definir la clave para comunicarse con el Worker (por ejemplo AGENT_API_KEY=... en Node y el Worker espera ese valor).
+
+Iniciar el servicio: npm run dev:wa (o similar) que ejecute el script Node. En la consola, la primera vez, whatsapp-web.js emitirá un QR code (en ASCII) para vincular el número de teléfono. Escanear con la cuenta de WhatsApp que actuará como bot. Luego debería aparecer "Client is ready!" indicando conexión establecida.
+
+Mantener este servicio corriendo en segundo plano (si en producción, se puede usar PM2, Docker o un servicio tipo Heroku). Nota: Este servicio no está en Cloudflare, por lo que el despliegue puede ser en cualquier VPS, serverless Node host, etc., contanto que pueda comunicarse con el Worker. Si se requiere exponer un endpoint (/send-otp), asegurarse de abrir el puerto (por defecto Express en 3000) o mejor configurar un reverse proxy/NGROK para que el Worker pueda hacer la llamada. En entornos controlados, se podría invocar la cola en lugar del endpoint.
+
+Uso y pruebas:
+
+Registrar un usuario nuevo vía API o directamente insertando en D1 para pruebas. Verificar OTP (posiblemente adaptando la lógica si no queremos realmente enviar OTP durante dev, podríamos configurar whatsapp-web.js en sandbox).
+
+Hacer login y probar consultas de ventas/compras con Postman para confirmar que la integración SII->D1->API funciona. Para simular llamadas al SII sin usar credenciales reales en desarrollo, se podría stubear las respuestas con datos mock (o cargar seeds como hicimos).
+
+Subir un PDF de prueba (por ejemplo un PDF sencillo con texto conocido) mediante el endpoint. Verificar en la base D1 que se crearon fragmentos en embeddings y que Vectorize indexó (no visible directamente, pero se podría hacer una query test).
+
+Probar el endpoint de preguntas con algo que el contrato contenga.
+
+Finalmente, probar la integración WhatsApp real: desde el número de WhatsApp registrado como usuario, enviar mensajes al número del bot:
+
+"Hola" (el bot podría no tener respuesta para un saludo genérico a menos que se programe un help).
+
+"¿Cuánto vendí en septiembre?" -> El bot debe responder con la información (requiere que previamente ese período esté cargado en D1; si no, podría tardar mientras lo consulta en SII si implementamos fetch on-demand).
+
+"¿Cuándo vence el F29?" -> El bot responde con la info estática programada.
+
+"¿Hasta cuándo está vigente mi contrato con ACME?" -> El bot (RAG) responde con la fecha extraída del PDF.
+
+Si todas las pruebas pasan, el sistema está funcionando correctamente. 🎉
+
+Scripts de desarrollo y despliegue
+
+En el package.json principal, se definen algunos scripts para conveniencia:
+
+npm run dev – Inicia ambos servicios en modo desarrollo concurrentemente. Por ejemplo, usando la herramienta concurrently, este script ejecuta tanto wrangler dev (para el Worker) como nodemon index.js (para el Node) en paralelo, facilitando el desarrollo integrado. (En sistemas Windows, se puede usar && o comandos equivalentes).
+
+npm run dev:worker – Inicia solo el Worker en dev.
+
+npm run dev:wa – Inicia solo el servicio WhatsApp en dev.
+
+npm run deploy – Ejecuta la publicación del Worker con Wrangler (wrangler publish). Para el servicio WhatsApp, al no ser Cloudflare, la "publicación" consiste en desplegar en su host (esto puede ser manual o con Docker). Si se dockeriza, podríamos tener npm run deploy:wa para construir/imprimir la imagen.
+
+npm run migrate – (Opcional) Ejecuta migraciones D1, por ejemplo aplicando schema.sql en remoto con Wrangler CLI.
+
+Consideraciones finales:
+
+Seguridad: Asegurarse de proteger las rutas internas. Por ejemplo, el endpoint /api/agent/message que usa el Node debería requerir un header API Key conocido solo por Node, para evitar que cualquiera llame y obtenga datos de otros usuarios. Asimismo, la comunicación entre Node y Worker puede ser cifrada (HTTPS) ya que Workers endpoints usan HTTPS.
+
+Escalabilidad: En la capa gratuita estamos limitados pero se puede crecer: si hubiera muchos usuarios, convendría implementar bien las colas para SII y quizás sharding de D1 (D1 tiene límite 10MB por base en free, aunque se planea ampliación
+developers.cloudflare.com
+; se podría usar una base por usuario si fuese masivo, pero en nuestro caso es manejable).
+
+Manejo de cambios SII: Si SII cambia sus APIs o agrega nuevos tipos, habrá que actualizar la integración (la YAML provista sirve de referencia para parsear todas las columnas, lo cual ya hicimos en el esquema). También vigilar expiración de credenciales (la clave SII puede requerir ser reingresada en algún momento).
+
+Costo: Todo se mantiene dentro de la capa gratuita: Workers (100k solicitudes diarias gratis, suficiente para este caso), D1 (gratis en beta, luego plan de pago según almacenamiento/consultas), R2 (primeros GB y operaciones gratis, un PDF ocasional entra en eso), Vectorize (beta con límite de vectores gratis), Workers AI (los primeros 100K tokens de inferencia pueden ser de cortesía, luego cobro ínfimo). En general, el costo sería muy bajo para el uso previsto.
+
+Con todo lo anterior, el proyecto proporciona una solución completa para que un contribuyente pueda registrarse, obtener sus datos tributarios automáticamente de SII, almacenarlos localmente y consultarlos vía API o un chatbot de WhatsApp, incluyendo la capacidad de consultar cláusulas de sus contratos subidos, con la potencia de búsqueda semántica y respuesta en lenguaje natural.
+
+Referencias: Este diseño aprovecha varias características recientes de Cloudflare (D1, Vectorize, Workers AI) e implementa un caso de uso de RAG similar al ejemplo oficial de Cloudflare
+developers.cloudflare.com
+developers.cloudflare.com
+. Se utilizaron las especificaciones de la API del SII (RCV) provistas para definir el esquema de datos local. La integración con WhatsApp mediante whatsapp-web.js sigue la documentación de dicha librería
+github.com
+. Todos los componentes operan en un entorno serverless o gratuito, mostrando una arquitectura moderna y económica para este tipo de aplicación. ¡A implementar!

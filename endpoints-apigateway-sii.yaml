@@ -1,0 +1,1600 @@
+ 
+  /api/v1/sii/rcv/ventas/resumen/{emisor}/{periodo}:
+    post:
+      tags:
+        - API RCV - Registro de Ventas
+      summary: Resumen de Ventas
+      description: >-
+        **Permiso requerido**: `query rcv`
+
+
+        **Pasarela a**:
+        [https://www4.sii.cl/consdcvinternetui/#/index](https://www4.sii.cl/consdcvinternetui/#/index)
+        (www4 o www4c)
+      operationId: resumenDeVentas
+      parameters:
+        - name: formato
+          in: query
+          schema:
+            type: string
+            example: json
+          description: '`json` `csv`'
+        - name: certificacion
+          in: query
+          schema:
+            type: string
+            example: '1'
+          description: '`0` ambiente de producción<br/>`1` ambiente de certificación'
+        - name: csv_delimiter
+          in: query
+          schema:
+            type: string
+            example: ;
+          description: Delimitador que se debe usar en el formato CSV
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                auth:
+                  type: object
+                  properties:
+                    pass:
+                      type: object
+                      properties:
+                        clave:
+                          type: string
+                          example: ''
+                        rut:
+                          type: string
+                          example: 76192083-9
+            examples:
+              Resumen de Ventas:
+                value:
+                  auth:
+                    pass:
+                      clave: ''
+                      rut: 76192083-9
+      responses:
+        '200':
+          description: Resumen de Ventas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dcvCodigo:
+                          type: number
+                          example: 1234
+                        dcvNombreTipoDoc:
+                          type: string
+                          example: Factura Electrónica
+                        dcvOperacion:
+                          nullable: true
+                          example: null
+                        dcvTipoIngresoDoc:
+                          type: string
+                          example: DET_ELE
+                        rsmnCodigo:
+                          type: number
+                          example: 1234
+                        rsmnEstadoContab:
+                          nullable: true
+                          example: null
+                        rsmnIVAUsoComun:
+                          type: number
+                          example: 0
+                        rsmnLink:
+                          type: boolean
+                          example: true
+                        rsmnMntExe:
+                          type: number
+                          example: 0
+                        rsmnMntIVA:
+                          type: number
+                          example: 0
+                        rsmnMntIVANoRec:
+                          type: number
+                          example: 0
+                        rsmnMntNeto:
+                          type: number
+                          example: 0
+                        rsmnMntTotal:
+                          type: number
+                          example: 0
+                        rsmnTipoDocInteger:
+                          type: number
+                          example: 33
+                        rsmnTotDoc:
+                          type: number
+                          example: 1
+                        rsmnTotalRutEmisor:
+                          nullable: true
+                          example: null
+                    example:
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 33
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Nota de Crédito Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 61
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+              examples:
+                Resumen de Ventas:
+                  value:
+                    data:
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 33
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Nota de Crédito Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 61
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+    parameters:
+      - name: emisor
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 76192083-9
+        description: RUT del emisor de los documentos
+      - name: periodo
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '202409'
+        description: Período de emisión de los documentos
+
+
+
+
+
+  /api/v1/sii/rcv/ventas/detalle/{emisor}/{periodo}/{dte}:
+    post:
+      tags:
+        - API RCV - Registro de Ventas
+      summary: Detalle de Ventas
+      description: >-
+        **Permiso requerido**: `query rcv`
+
+
+        **Pasarela a**:
+        [https://www4.sii.cl/consdcvinternetui/#/index](https://www4.sii.cl/consdcvinternetui/#/index)
+        (www4 o www4c)
+
+
+        Recurso para obtener el detalle de las ventas a partir de los datos del
+        Registro de Ventas.
+
+
+        El detalle es el listado de documentos de cierto tipo disponibles en el
+        registro de ventas. En ningún caso este recurso entregará el listado de
+        items (productos o servicios) de cada documento. Esto no es posible
+        porque ese dato no se encuentra en el listado de documentos del registro
+        de ventas.
+
+
+        **Archivo en CSV del RCV del SII**
+
+
+        Se pueden obtener los datos en distintos tipos. Sin embargo, el tipo
+        `rcv_csv` tiene ciertas ventajas:
+
+
+        - No es necesario indicar el código de DTE, se recomienda usar 0 para el
+        campo `dte` en la URL ya que no se usa. Siempre se obtienen todos los
+        tipos de documentos del período.
+
+        - Permite obtener los datos de impuestos específicos.
+
+        - En general, debería ser el tipo con mejor tiempo de respuesta.
+
+
+        Considerar adicionalmente, que es más rápido usar el tipo `rcv_csv` con
+        el formato `csv`.
+
+
+        **Respuesta**
+
+
+        La respuesta incluirá por defecto los datos obtenidos directamente desde
+        el SII, donde los campos vienen desde el SII. Se recomienda revisar el
+        registro de compras para ir comparando aquellos campos que no se
+        entienda a partir de su nombre lo que significan. Los más importantes
+        son:
+
+
+        - `detTipoDoc`: código del tipo de DTE emitido.
+
+        - `detRutDoc`: RUT del cliente, sin dígito verificador.
+
+        - `detDvDoc`: dígito verificador del RUT del cliente.
+
+        - `detRznSoc`: razón social del cliente.
+
+        - `detNroDoc`: folio del DTE emitido.
+
+        - `detFchDoc`: fecha de emisión del DTE emitido.
+
+        - `detFecAcuse`: fecha en que el receptor generó el acuse de recibido
+        (si es que se generó).
+
+        - `detFecReclamado`: fecha en que el receptor generó el reclamo (si es
+        que se generó).
+
+        - `detFecRecepcion`: fecha de recepción del XML del DTE por parte del
+        SII.
+
+        - `detMntExe`: total monto exento.
+
+        - `detMntNeto`: total monto neto.
+
+        - `detMntIVA`: total monto IVA.
+
+        - `detMntTotal`: total del documento.
+
+        - `detTipoDocRef`: código del tipo de DTE de la referencia en el DTE
+        emitido.
+
+        - `detFolioDocRef`: folio del DTE referenciado en el documento de venta.
+
+        - `detEventoReceptor`: código del evento que a realizado el receptor (si
+        se ha realizado).
+
+        - `detEventoReceptorLeyenda`: glosa del evento que a realizado el
+        receptor (si se ha realizado).
+
+        - `detPcarga`: período contable en el que corresponde registrar este
+        documento de venta.
+      operationId: detalleDeVentas
+      parameters:
+        - name: formato
+          in: query
+          schema:
+            type: string
+            example: json
+          description: '`json` `csv`'
+        - name: certificacion
+          in: query
+          schema:
+            type: string
+            example: '0'
+          description: '`0` ambiente de producción<br/>`1` ambiente de certificación'
+        - name: tipo
+          in: query
+          schema:
+            type: string
+            example: rcv_csv
+          description: '`rcv` `iecv` `rcv_csv`'
+        - name: csv_delimiter
+          in: query
+          schema:
+            type: string
+            example: ;
+          description: >-
+            Delimitador que se debe usar en el formato `csv` con tipo `rcv` o
+            `iecv`
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                auth:
+                  type: object
+                  properties:
+                    pass:
+                      type: object
+                      properties:
+                        clave:
+                          type: string
+                          example: ''
+                        rut:
+                          type: string
+                          example: 76192083-9
+            examples:
+              Detalle de Ventas:
+                value:
+                  auth:
+                    pass:
+                      clave: ''
+                      rut: 76192083-9
+      responses:
+        '200':
+          description: Detalle de Ventas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cambiarTipoTran:
+                          type: boolean
+                          example: false
+                        dcvCodigo:
+                          type: number
+                          example: 1234
+                        dcvEstadoContab:
+                          nullable: true
+                          example: null
+                        descTipoTransaccion:
+                          type: string
+                          example: Del Giro
+                        detAnulado:
+                          nullable: true
+                          example: null
+                        detCdgSIISucur:
+                          type: number
+                          example: 0
+                        detCodigo:
+                          type: number
+                          example: 1234
+                        detCredEc:
+                          type: number
+                          example: 0
+                        detDepEnvase:
+                          type: number
+                          example: 0
+                        detDvDoc:
+                          type: string
+                          example: '9'
+                        detEmisorNota:
+                          type: number
+                          example: 0
+                        detEventoReceptor:
+                          nullable: true
+                          example: null
+                        detEventoReceptorLeyenda:
+                          nullable: true
+                          example: null
+                        detExpNacionalidad:
+                          nullable: true
+                          example: null
+                        detExpNumId:
+                          nullable: true
+                          example: null
+                        detFchDoc:
+                          type: string
+                          example: 25/11/2019
+                        detFecAcuse:
+                          nullable: true
+                          example: null
+                        detFecRecepcion:
+                          type: string
+                          example: 04/12/2019 14:58:09
+                        detFecReclamado:
+                          nullable: true
+                          example: null
+                        detFolioDocRef:
+                          nullable: true
+                          example: null
+                        detIVAFueraPlazo:
+                          type: number
+                          example: 0
+                        detIVANoRetenido:
+                          type: number
+                          example: 0
+                        detIVAPropio:
+                          type: number
+                          example: 0
+                        detIVARetParcial:
+                          type: number
+                          example: 0
+                        detIVARetTotal:
+                          type: number
+                          example: 0
+                        detIVATerceros:
+                          type: number
+                          example: 0
+                        detIVAUsoComun:
+                          nullable: true
+                          example: null
+                        detImpVehiculo:
+                          nullable: true
+                          example: null
+                        detIndServicio:
+                          type: number
+                          example: 0
+                        detIndSinCosto:
+                          type: number
+                          example: 0
+                        detLey18211:
+                          type: number
+                          example: 0
+                        detLiqDvEmisor:
+                          nullable: true
+                          example: null
+                        detLiqRutEmisor:
+                          type: number
+                          example: 0
+                        detLiqValComExe:
+                          type: number
+                          example: 0
+                        detLiqValComIVA:
+                          type: number
+                          example: 0
+                        detLiqValComNeto:
+                          type: number
+                          example: 0
+                        detMntActFijo:
+                          nullable: true
+                          example: null
+                        detMntCodNoRec:
+                          nullable: true
+                          example: null
+                        detMntExe:
+                          type: number
+                          example: 0
+                        detMntIVA:
+                          type: number
+                          example: 0
+                        detMntIVAActFijo:
+                          nullable: true
+                          example: null
+                        detMntIVANoRec:
+                          nullable: true
+                          example: null
+                        detMntNeto:
+                          type: number
+                          example: 0
+                        detMntNoFact:
+                          type: number
+                          example: 0
+                        detMntPeriodo:
+                          type: number
+                          example: 0
+                        detMntSinCredito:
+                          nullable: true
+                          example: null
+                        detMntTotal:
+                          type: number
+                          example: 0
+                        detNroDoc:
+                          type: number
+                          example: 123
+                        detNumInt:
+                          nullable: true
+                          example: null
+                        detPcarga:
+                          type: number
+                          example: 201912
+                        detPsjInt:
+                          type: number
+                          example: 0
+                        detPsjNac:
+                          type: number
+                          example: 0
+                        detRutDoc:
+                          type: number
+                          example: 1
+                        detRznSoc:
+                          type: string
+                          example: ''
+                        detTabCigarrillos:
+                          nullable: true
+                          example: null
+                        detTabElaborado:
+                          nullable: true
+                          example: null
+                        detTabPuros:
+                          nullable: true
+                          example: null
+                        detTasaImp:
+                          type: string
+                          example: '19'
+                        detTipoDoc:
+                          type: number
+                          example: 33
+                        detTipoDocRef:
+                          type: number
+                          example: 0
+                        detTipoTransaccion:
+                          nullable: true
+                          example: null
+                        detTpoImp:
+                          nullable: true
+                          example: null
+                        dhdrCodigo:
+                          type: number
+                          example: 1234
+                        totalDinrMontoIVANoR:
+                          nullable: true
+                          example: null
+                        totalDtoiMontoImp:
+                          type: number
+                          example: 0
+                    example:
+                      - cambiarTipoTran: false
+                        dcvCodigo: 1234
+                        dcvEstadoContab: null
+                        descTipoTransaccion: Del Giro
+                        detAnulado: null
+                        detCdgSIISucur: 0
+                        detCodigo: 1234
+                        detCredEc: 0
+                        detDepEnvase: 0
+                        detDvDoc: '9'
+                        detEmisorNota: 0
+                        detEventoReceptor: null
+                        detEventoReceptorLeyenda: null
+                        detExpNacionalidad: null
+                        detExpNumId: null
+                        detFchDoc: 25/11/2019
+                        detFecAcuse: null
+                        detFecRecepcion: 04/12/2019 14:58:09
+                        detFecReclamado: null
+                        detFolioDocRef: null
+                        detIVAFueraPlazo: 0
+                        detIVANoRetenido: 0
+                        detIVAPropio: 0
+                        detIVARetParcial: 0
+                        detIVARetTotal: 0
+                        detIVATerceros: 0
+                        detIVAUsoComun: null
+                        detImpVehiculo: null
+                        detIndServicio: 0
+                        detIndSinCosto: 0
+                        detLey18211: 0
+                        detLiqDvEmisor: null
+                        detLiqRutEmisor: 0
+                        detLiqValComExe: 0
+                        detLiqValComIVA: 0
+                        detLiqValComNeto: 0
+                        detMntActFijo: null
+                        detMntCodNoRec: null
+                        detMntExe: 0
+                        detMntIVA: 0
+                        detMntIVAActFijo: null
+                        detMntIVANoRec: null
+                        detMntNeto: 0
+                        detMntNoFact: 0
+                        detMntPeriodo: 0
+                        detMntSinCredito: null
+                        detMntTotal: 0
+                        detNroDoc: 123
+                        detNumInt: null
+                        detPcarga: 201912
+                        detPsjInt: 0
+                        detPsjNac: 0
+                        detRutDoc: 1
+                        detRznSoc: ''
+                        detTabCigarrillos: null
+                        detTabElaborado: null
+                        detTabPuros: null
+                        detTasaImp: '19'
+                        detTipoDoc: 33
+                        detTipoDocRef: 0
+                        detTipoTransaccion: null
+                        detTpoImp: null
+                        dhdrCodigo: 1234
+                        totalDinrMontoIVANoR: null
+                        totalDtoiMontoImp: 0
+              examples:
+                Detalle de Ventas:
+                  value:
+                    data:
+                      - cambiarTipoTran: false
+                        dcvCodigo: 1234
+                        dcvEstadoContab: null
+                        descTipoTransaccion: Del Giro
+                        detAnulado: null
+                        detCdgSIISucur: 0
+                        detCodigo: 1234
+                        detCredEc: 0
+                        detDepEnvase: 0
+                        detDvDoc: '9'
+                        detEmisorNota: 0
+                        detEventoReceptor: null
+                        detEventoReceptorLeyenda: null
+                        detExpNacionalidad: null
+                        detExpNumId: null
+                        detFchDoc: 25/11/2019
+                        detFecAcuse: null
+                        detFecRecepcion: 04/12/2019 14:58:09
+                        detFecReclamado: null
+                        detFolioDocRef: null
+                        detIVAFueraPlazo: 0
+                        detIVANoRetenido: 0
+                        detIVAPropio: 0
+                        detIVARetParcial: 0
+                        detIVARetTotal: 0
+                        detIVATerceros: 0
+                        detIVAUsoComun: null
+                        detImpVehiculo: null
+                        detIndServicio: 0
+                        detIndSinCosto: 0
+                        detLey18211: 0
+                        detLiqDvEmisor: null
+                        detLiqRutEmisor: 0
+                        detLiqValComExe: 0
+                        detLiqValComIVA: 0
+                        detLiqValComNeto: 0
+                        detMntActFijo: null
+                        detMntCodNoRec: null
+                        detMntExe: 0
+                        detMntIVA: 0
+                        detMntIVAActFijo: null
+                        detMntIVANoRec: null
+                        detMntNeto: 0
+                        detMntNoFact: 0
+                        detMntPeriodo: 0
+                        detMntSinCredito: null
+                        detMntTotal: 0
+                        detNroDoc: 123
+                        detNumInt: null
+                        detPcarga: 201912
+                        detPsjInt: 0
+                        detPsjNac: 0
+                        detRutDoc: 1
+                        detRznSoc: ''
+                        detTabCigarrillos: null
+                        detTabElaborado: null
+                        detTabPuros: null
+                        detTasaImp: '19'
+                        detTipoDoc: 33
+                        detTipoDocRef: 0
+                        detTipoTransaccion: null
+                        detTpoImp: null
+                        dhdrCodigo: 1234
+                        totalDinrMontoIVANoR: null
+                        totalDtoiMontoImp: 0
+    parameters:
+      - name: emisor
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 76192083-9
+        description: RUT del emisor de los documentos
+      - name: periodo
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '202409'
+        description: Período de emisión de los documentos
+      - name: dte
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '0'
+        description: Tipo de documento que se desea obtener el detalle
+
+
+
+
+
+/api/v1/sii/rcv/compras/resumen/{receptor}/{periodo}/{estado}:
+    post:
+      tags:
+        - API RCV - Registro de Compras
+      summary: Resumen de Compras
+      description: >-
+        **Permiso requerido**: `query rcv`
+
+
+        **Pasarela a**:
+        [https://www4.sii.cl/consdcvinternetui/#/index](https://www4.sii.cl/consdcvinternetui/#/index)
+        (www4 o www4c)
+      operationId: resumenDeCompras
+      parameters:
+        - name: formato
+          in: query
+          schema:
+            type: string
+            example: json
+          description: '`json` `csv`'
+        - name: certificacion
+          in: query
+          schema:
+            type: string
+            example: '0'
+          description: '`0` ambiente de producción<br/>`1` ambiente de certificación'
+        - name: csv_delimiter
+          in: query
+          schema:
+            type: string
+            example: ;
+          description: Delimitador que se debe usar en el formato CSV
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                auth:
+                  type: object
+                  properties:
+                    pass:
+                      type: object
+                      properties:
+                        clave:
+                          type: string
+                          example: ''
+                        rut:
+                          type: string
+                          example: 76192083-9
+            examples:
+              Resumen de Compras:
+                value:
+                  auth:
+                    pass:
+                      clave: ''
+                      rut: 76192083-9
+      responses:
+        '200':
+          description: Resumen de Compras
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dcvCodigo:
+                          type: number
+                          example: 1234
+                        dcvNombreTipoDoc:
+                          type: string
+                          example: Factura Electrónica
+                        dcvOperacion:
+                          nullable: true
+                          example: null
+                        dcvTipoIngresoDoc:
+                          type: string
+                          example: DET_ELE
+                        rsmnCodigo:
+                          type: number
+                          example: 1234
+                        rsmnEstadoContab:
+                          nullable: true
+                          example: null
+                        rsmnIVAUsoComun:
+                          type: number
+                          example: 0
+                        rsmnLink:
+                          type: boolean
+                          example: true
+                        rsmnMntExe:
+                          type: number
+                          example: 0
+                        rsmnMntIVA:
+                          type: number
+                          example: 0
+                        rsmnMntIVANoRec:
+                          type: number
+                          example: 0
+                        rsmnMntNeto:
+                          type: number
+                          example: 0
+                        rsmnMntTotal:
+                          type: number
+                          example: 0
+                        rsmnTipoDocInteger:
+                          type: number
+                          example: 33
+                        rsmnTotDoc:
+                          type: number
+                          example: 1
+                        rsmnTotalRutEmisor:
+                          nullable: true
+                          example: null
+                    example:
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 33
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura no Afecta o Exenta Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 34
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+              examples:
+                Resumen de Compras:
+                  value:
+                    data:
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 33
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+                      - dcvCodigo: 1234
+                        dcvNombreTipoDoc: Factura no Afecta o Exenta Electrónica
+                        dcvOperacion: null
+                        dcvTipoIngresoDoc: DET_ELE
+                        rsmnCodigo: 1234
+                        rsmnEstadoContab: null
+                        rsmnIVAUsoComun: 0
+                        rsmnLink: true
+                        rsmnMntExe: 0
+                        rsmnMntIVA: 0
+                        rsmnMntIVANoRec: 0
+                        rsmnMntNeto: 0
+                        rsmnMntTotal: 0
+                        rsmnTipoDocInteger: 34
+                        rsmnTotDoc: 1
+                        rsmnTotalRutEmisor: null
+    parameters:
+      - name: receptor
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 76192083-9
+        description: RUT del receptor de los documentos
+      - name: periodo
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '202410'
+        description: Período del registro
+      - name: estado
+        in: path
+        required: true
+        schema:
+          type: string
+          example: REGISTRO
+        description: '`REGISTRO` `PENDIENTE` `NO_INCLUIR` `RECLAMADO`'
+
+
+
+
+
+  /api/v1/sii/rcv/compras/detalle/{receptor}/{periodo}/{dte}/{estado}:
+    post:
+      tags:
+        - API RCV - Registro de Compras
+      summary: Detalle de Compras
+      description: >-
+        **Permiso requerido**: `query rcv`
+
+
+        **Pasarela a**:
+        [https://www4.sii.cl/consdcvinternetui/#/index](https://www4.sii.cl/consdcvinternetui/#/index)
+        (www4 o www4c)
+
+
+        Recurso para obtener el detalle de las compras a partir de los datos del
+        Registro de Compras.
+
+
+        El detalle es el listado de documentos de cierto tipo disponibles en el
+        registro de compras. En ningún caso este recurso entregará el listado de
+        items (productos o servicios) de cada documento. Esto no es posible
+        porque ese dato no se encuentra en el listado de documentos del registro
+        de compras.
+
+
+        **Archivo en CSV del RCV del SII**
+
+
+        Se pueden obtener los datos en distintos tipos. Sin embargo, el tipo
+        `rcv_csv` tiene ciertas ventajas:
+
+
+        - No es necesario indicar el código de DTE, se recomienda usar 0 para el
+        campo `dte` en la URL ya que no se usa. Siempre se obtienen todos los
+        tipos de documentos del período.
+
+        - Permite obtener los datos de impuestos específicos.
+
+        - En general, debería ser el tipo con mejor tiempo de respuesta.
+
+
+        Considerar adicionalmente, que es más rápido usar el tipo `rcv_csv` con
+        el formato `csv`.
+
+
+        **Importante**: el tipo `rcv_csv` y formato `json` sólo funciona con el
+        estado `REGISTRO`. No es posible bajar otros estados con este tipo y
+        formato de datos. Si desea utilizar el topo `rcv_csv` con otro estado
+        deberá usar el formato `csv`.
+
+
+        **Respuesta**
+
+
+        La respuesta incluirá por defecto los datos obtenidos directamente desde
+        el SII, donde los campos vienen desde el SII. Se recomienda revisar el
+        registro de compras para ir comparando aquellos campos que no se
+        entienda a partir de su nombre lo que significan. Adjuntamos una
+        descripción general de los campos:
+
+
+        - `detTipoDoc`: código del tipo de DTE recibido.
+
+        - `detRutDoc`: RUT del proveedor, sin dígito verificador.
+
+        - `detDvDoc`: dígito verificador del RUT del proveedor.
+
+        - `detRznSoc`: razón social del proveedor.
+
+        - `detNroDoc`: folio del DTE recibido.
+
+        - `detFchDoc`: fecha de emisión del DTE recibido.
+
+        - `detFecAcuse`: fecha en que el receptor generó el acuse de recibido
+        (si es que se generó).
+
+        - `detFecReclamado`: fecha en que el receptor generó el reclamo (si es
+        que se generó).
+
+        - `detFecRecepcion`: fecha de recepción del XML del DTE por parte del
+        SII.
+
+        - `detMntExe`: total monto exento.
+
+        - `detMntNeto`: total monto neto.
+
+        - `detMntIVA`: total monto IVA.
+
+        - `detMntTotal`: total del documento.
+
+        - `detTipoDocRef`: código del tipo de DTE de la referencia en el DTE
+        recibido.
+
+        - `detFolioDocRef`: folio del DTE referenciado en el documento de
+        compra.
+
+        - `detEventoReceptor`: código del evento que a realizado el receptor (si
+        se ha realizado).
+
+        - `detEventoReceptorLeyenda`: glosa del evento que a realizado el
+        receptor (si se ha realizado).
+
+        - `detPcarga`: período contable en el que corresponde registrar este
+        documento de compra.
+
+        - `detMntActFijo`: Corresponde al monto del activo fijo del DTE (si fue
+        clasificado como activo fijo).
+
+        - `detMntIVAActFijo`: Monto del IVA del activo fijo del DTE (si fue
+        clasificado como activo fijo).
+
+        - `detMntIVANoRec`: Monto IVA no recuperable del DTE.
+
+        - `detMntCodNoRec`: corresponde el código del IVA no recuperable (si es
+        que hay IVA no recuperable).
+
+        - `detAnulado`: cantidad de documentos anulados.
+
+        - `detMntSinCredito`: es el monto del IVA sin derecho a crédito fiscal.
+
+        - `detCdgSIISucur`: corresponde al código de la sucursal registrada en
+        el SII.
+
+        - `detIndServicio`: código del indicador de servicio.
+
+        - `detTipoTransaccion`: tipo de transacción del documento.
+
+        - `detIndSinCosto`: indica si la compra es sin costo (solo en facturas).
+
+        - `detIVAFueraPlazo`: valor del total del IVA que está fuera de plazo,
+        sólo aplica para notas de crédito.
+
+        - `detMntNoFact`: monto no facturable del DTE.
+
+        - `detIVATerceros`: monto del IVA terceros, sólo cuando hay venta o
+        servicio por cuenta de terceros.
+
+        - `detMntPeriodo`: se refiere a la cantidad o monto de dinero declarado
+        durante un período determinado. Este valor puede ser negativo.
+
+        - `detCredEc`: es el crédito especial del 65% para Empresas
+        Constructoras.
+
+        - `detIVAPropio`: se refiere al monto del Impuesto al Valor Agregado
+        (IVA) propio que ha sido declarado durante un período determinado.
+        Aplica sólo cuando hay venta o servicio por cuenta de terceros.
+
+        - `detDepEnvase`: se refiera a la garantía de depósito por envase.
+
+        - `detLiqValComIVA`: se refiere al valor líquido de una compra o
+        transacción que incluye el Impuesto al Valor Agregado (IVA).
+
+        - `detTasaImp`: se refiere a la tasa o porcentaje de impuesto aplicado a
+        una transacción específica.
+
+        - `"detLiqValComExe`: se refiere al valor líquido de una compra o
+        transacción exenta de impuestos.
+
+        - `detMntSinCredito`: corresponde al monto sin derecho a crédito.
+
+        - `detLiqValComNeto`: se refiere al valor líquido o neto de una compra o
+        transacción.
+
+        - `detExpNumId`: se refiere al número de identificación del exportador.
+
+        - `detExpNacionalidad`: se refiere a la nacionalidad del exportador.
+
+        - `detLiqDvEmisor`: se refiere al dígito verificador del emisor en una
+        transacción o documento tributario.
+
+        - `detCodigo`: puede referirse a diferentes códigos asociados a
+        transacciones, productos o servicios en el contexto de los registros -
+        tributarios\`.
+
+        - `detTabPuros`: corresponde al impuesto por tabacos manufacturados
+        (cigarros puros)
+
+        - `detTabCigarrillos`: corresponde al impuesto por tabacos
+        manufacturados (cigarrillos)
+
+        - `detTabElaborado`: corresponde al impuesto por tabacos manufacturados
+        (tabaco elaborado)
+
+        - `detIVARetTotal`: se refiere al monto total de Impuesto al Valor
+        Agregado (IVA) retenido en una transacción o período determinado.
+
+        - `detIVARetParcial`: Corresponde al monto parcial de Impuesto al Valor
+        Agregado (IVA) retenido en una transacción o período determinado.
+
+        - `detIVANoRetenido`: es el monto de Impuesto al Valor Agregado (IVA)
+        que no ha sido retenido en una transacción o período determinado.
+
+        - `detImpVehiculo`: corresponde al impuesto a los vehículos automóviles
+
+        - `detIVAUsoComun`: se refiere al Impuesto al Valor Agregado (IVA)
+        aplicado a los bienes o servicios de uso común.
+
+        - `detTpoImp`: corresponde al código del tipo impuesto del DTE.
+
+        - `detLiqRutEmisor`: se refiere al RUT (Rol Único Tributario) del emisor
+        en una transacción o documento tributario.
+
+        - `descTipoTransaccion`: descripción de cómo se clasifica el tipo de
+        compra del DTE.
+
+        - `detEmisorNota`: se refiere al emisor de una nota de crédito o débito.
+
+        - `totalDinrMontoIVANoR`: se refiere al monto total en dinero del
+        Impuesto al Valor Agregado (IVA) no retenido en una transacción o
+        período determinado.
+
+        - `detPsjNac`: se refiere al número de pasajeros nacionales en una
+        transacción o documento tributario.
+
+        - `detPsjInt`: se refiere al número de pasajeros internacionales en una
+        transacción o documento tributario.
+
+        - `detNumInt`: corresponde al número o cantidad relacionada con
+        operaciones o transacciones internacionales.
+
+        - `totalDtoiMontoImp`: se refiere al monto total del descuento sobre
+        impuestos en una transacción o período determinado.
+
+        - `dcvCodigo`: corresponde al código que permite al SII tener
+        información precisa sobre la actividad económica del contribuyente.
+
+        - `dcvEstadoContab`: se refiere al estado contable de una entidad o
+        contribuyente.
+
+        - `detLey18211`: corresponde al impuesto del 4.4% por la importación de
+        mercancías extranjeras, efectuada desde Zona Franca Primaria a Zona
+        Franca de Extensión, el cual se calculará sobre el valor CIF de dichas
+        mercancías.
+      operationId: detalleDeCompras
+      parameters:
+        - name: formato
+          in: query
+          schema:
+            type: string
+            example: json
+          description: '`json` `csv`'
+        - name: certificacion
+          in: query
+          schema:
+            type: string
+            example: '0'
+          description: '`0` ambiente de producción<br/>`1` ambiente de certificación'
+        - name: tipo
+          in: query
+          schema:
+            type: string
+            example: rcv
+          description: '`rcv` `iecv` `rcv_csv`'
+        - name: csv_delimiter
+          in: query
+          schema:
+            type: string
+            example: ;
+          description: >-
+            Delimitador que se debe usar en el formato `csv` con tipo `rcv` o
+            `iecv`
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                auth:
+                  type: object
+                  properties:
+                    pass:
+                      type: object
+                      properties:
+                        clave:
+                          type: string
+                          example: ''
+                        rut:
+                          type: string
+                          example: 76192083-9
+            examples:
+              Detalle de Compras:
+                value:
+                  auth:
+                    pass:
+                      clave: ''
+                      rut: 76192083-9
+      responses:
+        '200':
+          description: Detalle de Compras
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cambiarTipoTran:
+                          type: boolean
+                          example: true
+                        dcvCodigo:
+                          type: number
+                          example: 1234
+                        dcvEstadoContab:
+                          nullable: true
+                          example: null
+                        descTipoTransaccion:
+                          type: string
+                          example: Del Giro
+                        detAnulado:
+                          nullable: true
+                          example: null
+                        detCdgSIISucur:
+                          type: number
+                          example: 0
+                        detCodigo:
+                          type: number
+                          example: 1234
+                        detCredEc:
+                          nullable: true
+                          example: null
+                        detDepEnvase:
+                          nullable: true
+                          example: null
+                        detDvDoc:
+                          type: string
+                          example: '9'
+                        detEmisorNota:
+                          type: number
+                          example: 0
+                        detEventoReceptor:
+                          type: string
+                          example: C
+                        detEventoReceptorLeyenda:
+                          type: string
+                          example: Recibo otorgado por el receptor
+                        detExpNacionalidad:
+                          nullable: true
+                          example: null
+                        detExpNumId:
+                          nullable: true
+                          example: null
+                        detFchDoc:
+                          type: string
+                          example: 31/10/2019
+                        detFecAcuse:
+                          type: string
+                          example: 02/11/2019 13:26:04
+                        detFecRecepcion:
+                          type: string
+                          example: 30/10/2019 11:28:07
+                        detFecReclamado:
+                          nullable: true
+                          example: null
+                        detFolioDocRef:
+                          nullable: true
+                          example: null
+                        detIVAFueraPlazo:
+                          nullable: true
+                          example: null
+                        detIVANoRetenido:
+                          type: number
+                          example: 0
+                        detIVAPropio:
+                          nullable: true
+                          example: null
+                        detIVARetParcial:
+                          nullable: true
+                          example: null
+                        detIVARetTotal:
+                          nullable: true
+                          example: null
+                        detIVATerceros:
+                          nullable: true
+                          example: null
+                        detIVAUsoComun:
+                          type: number
+                          example: 0
+                        detImpVehiculo:
+                          type: number
+                          example: 0
+                        detIndServicio:
+                          nullable: true
+                          example: null
+                        detIndSinCosto:
+                          nullable: true
+                          example: null
+                        detLey18211:
+                          nullable: true
+                          example: null
+                        detLiqDvEmisor:
+                          nullable: true
+                          example: null
+                        detLiqRutEmisor:
+                          nullable: true
+                          example: null
+                        detLiqValComExe:
+                          nullable: true
+                          example: null
+                        detLiqValComIVA:
+                          nullable: true
+                          example: null
+                        detLiqValComNeto:
+                          nullable: true
+                          example: null
+                        detMntActFijo:
+                          type: number
+                          example: 0
+                        detMntCodNoRec:
+                          type: number
+                          example: 0
+                        detMntExe:
+                          type: number
+                          example: 0
+                        detMntIVA:
+                          type: number
+                          example: 733
+                        detMntIVAActFijo:
+                          type: number
+                          example: 0
+                        detMntIVANoRec:
+                          type: number
+                          example: 0
+                        detMntNeto:
+                          type: number
+                          example: 3859
+                        detMntNoFact:
+                          nullable: true
+                          example: null
+                        detMntPeriodo:
+                          nullable: true
+                          example: null
+                        detMntSinCredito:
+                          type: number
+                          example: 0
+                        detMntTotal:
+                          type: number
+                          example: 4592
+                        detNroDoc:
+                          type: number
+                          example: 123
+                        detNumInt:
+                          nullable: true
+                          example: null
+                        detPcarga:
+                          type: number
+                          example: 201910
+                        detPsjInt:
+                          nullable: true
+                          example: null
+                        detPsjNac:
+                          nullable: true
+                          example: null
+                        detRutDoc:
+                          type: number
+                          example: 1
+                        detRznSoc:
+                          type: string
+                          example: ''
+                        detTabCigarrillos:
+                          type: number
+                          example: 0
+                        detTabElaborado:
+                          type: number
+                          example: 0
+                        detTabPuros:
+                          type: number
+                          example: 0
+                        detTasaImp:
+                          nullable: true
+                          example: null
+                        detTipoDoc:
+                          type: number
+                          example: 33
+                        detTipoDocRef:
+                          type: number
+                          example: 0
+                        detTipoTransaccion:
+                          type: number
+                          example: 1
+                        detTpoImp:
+                          type: number
+                          example: 1
+                        dhdrCodigo:
+                          type: number
+                          example: 1234
+                        totalDinrMontoIVANoR:
+                          nullable: true
+                          example: null
+                        totalDtoiMontoImp:
+                          type: number
+                          example: 0
+                    example:
+                      - cambiarTipoTran: true
+                        dcvCodigo: 1234
+                        dcvEstadoContab: null
+                        descTipoTransaccion: Del Giro
+                        detAnulado: null
+                        detCdgSIISucur: 0
+                        detCodigo: 1234
+                        detCredEc: null
+                        detDepEnvase: null
+                        detDvDoc: '9'
+                        detEmisorNota: 0
+                        detEventoReceptor: C
+                        detEventoReceptorLeyenda: Recibo otorgado por el receptor
+                        detExpNacionalidad: null
+                        detExpNumId: null
+                        detFchDoc: 31/10/2019
+                        detFecAcuse: 02/11/2019 13:26:04
+                        detFecRecepcion: 30/10/2019 11:28:07
+                        detFecReclamado: null
+                        detFolioDocRef: null
+                        detIVAFueraPlazo: null
+                        detIVANoRetenido: 0
+                        detIVAPropio: null
+                        detIVARetParcial: null
+                        detIVARetTotal: null
+                        detIVATerceros: null
+                        detIVAUsoComun: 0
+                        detImpVehiculo: 0
+                        detIndServicio: null
+                        detIndSinCosto: null
+                        detLey18211: null
+                        detLiqDvEmisor: null
+                        detLiqRutEmisor: null
+                        detLiqValComExe: null
+                        detLiqValComIVA: null
+                        detLiqValComNeto: null
+                        detMntActFijo: 0
+                        detMntCodNoRec: 0
+                        detMntExe: 0
+                        detMntIVA: 733
+                        detMntIVAActFijo: 0
+                        detMntIVANoRec: 0
+                        detMntNeto: 3859
+                        detMntNoFact: null
+                        detMntPeriodo: null
+                        detMntSinCredito: 0
+                        detMntTotal: 4592
+                        detNroDoc: 123
+                        detNumInt: null
+                        detPcarga: 201910
+                        detPsjInt: null
+                        detPsjNac: null
+                        detRutDoc: 1
+                        detRznSoc: ''
+                        detTabCigarrillos: 0
+                        detTabElaborado: 0
+                        detTabPuros: 0
+                        detTasaImp: null
+                        detTipoDoc: 33
+                        detTipoDocRef: 0
+                        detTipoTransaccion: 1
+                        detTpoImp: 1
+                        dhdrCodigo: 1234
+                        totalDinrMontoIVANoR: null
+                        totalDtoiMontoImp: 0
+              examples:
+                Detalle de Compras:
+                  value:
+                    data:
+                      - cambiarTipoTran: true
+                        dcvCodigo: 1234
+                        dcvEstadoContab: null
+                        descTipoTransaccion: Del Giro
+                        detAnulado: null
+                        detCdgSIISucur: 0
+                        detCodigo: 1234
+                        detCredEc: null
+                        detDepEnvase: null
+                        detDvDoc: '9'
+                        detEmisorNota: 0
+                        detEventoReceptor: C
+                        detEventoReceptorLeyenda: Recibo otorgado por el receptor
+                        detExpNacionalidad: null
+                        detExpNumId: null
+                        detFchDoc: 31/10/2019
+                        detFecAcuse: 02/11/2019 13:26:04
+                        detFecRecepcion: 30/10/2019 11:28:07
+                        detFecReclamado: null
+                        detFolioDocRef: null
+                        detIVAFueraPlazo: null
+                        detIVANoRetenido: 0
+                        detIVAPropio: null
+                        detIVARetParcial: null
+                        detIVARetTotal: null
+                        detIVATerceros: null
+                        detIVAUsoComun: 0
+                        detImpVehiculo: 0
+                        detIndServicio: null
+                        detIndSinCosto: null
+                        detLey18211: null
+                        detLiqDvEmisor: null
+                        detLiqRutEmisor: null
+                        detLiqValComExe: null
+                        detLiqValComIVA: null
+                        detLiqValComNeto: null
+                        detMntActFijo: 0
+                        detMntCodNoRec: 0
+                        detMntExe: 0
+                        detMntIVA: 733
+                        detMntIVAActFijo: 0
+                        detMntIVANoRec: 0
+                        detMntNeto: 3859
+                        detMntNoFact: null
+                        detMntPeriodo: null
+                        detMntSinCredito: 0
+                        detMntTotal: 4592
+                        detNroDoc: 123
+                        detNumInt: null
+                        detPcarga: 201910
+                        detPsjInt: null
+                        detPsjNac: null
+                        detRutDoc: 1
+                        detRznSoc: ''
+                        detTabCigarrillos: 0
+                        detTabElaborado: 0
+                        detTabPuros: 0
+                        detTasaImp: null
+                        detTipoDoc: 33
+                        detTipoDocRef: 0
+                        detTipoTransaccion: 1
+                        detTpoImp: 1
+                        dhdrCodigo: 1234
+                        totalDinrMontoIVANoR: null
+                        totalDtoiMontoImp: 0
+    parameters:
+      - name: receptor
+        in: path
+        required: true
+        schema:
+          type: string
+          example: 76192083-9
+        description: RUT del receptor de los documentos
+      - name: periodo
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '202409'
+        description: Período del registro
+      - name: dte
+        in: path
+        required: true
+        schema:
+          type: string
+          example: '33'
+        description: Tipo de DTE a consultar el detalle
+      - name: estado
+        in: path
+        required: true
+        schema:
+          type: string
+          example: REGISTRO
+        description: '`REGISTRO` `PENDIENTE` `NO_INCLUIR` `RECLAMADO`'

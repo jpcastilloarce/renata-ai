@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Cloudflare
+.wrangler/
+wrangler.toml.backup
+dist/
+worker-configuration.d.ts
+
+# WhatsApp session data
+.wwebjs_auth/
+.wwebjs_cache/
+services/whatsapp/.wwebjs_auth/
+services/whatsapp/.wwebjs_cache/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+coverage/
+.nyc_output/
+
+# Build outputs
+build/
+dist/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database files (local development)
+*.db
+*.sqlite
+*.sqlite3
+
+# PDF test files (optional - comment if you want to track them)
+*.pdf

@@ -1,0 +1,322 @@
+{
+  "info": {
+    "name": "SII RCV API - Cloudflare Workers",
+    "description": "API Collection for SII RCV integration with AI capabilities",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://your-worker.workers.dev",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "test_rut",
+      "value": "76123456-7",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "register"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rut\": \"76123456-7\",\n  \"password\": \"miclave123\",\n  \"clave_sii\": \"claveSII123\",\n  \"telefono\": \"+56911112222\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/verify-otp",
+              "host": ["{{base_url}}"],
+              "path": ["api", "verify-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rut\": \"{{test_rut}}\",\n  \"codigo\": \"123456\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "login"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rut\": \"{{test_rut}}\",\n  \"password\": \"miclave123\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "pm.collectionVariables.set(\"token\", jsonData.token);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ventas (Sales)",
+      "item": [
+        {
+          "name": "Get Sales Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ventas/resumen?periodo=2023-09",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ventas", "resumen"],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "2023-09"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Sales Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ventas/detalle?periodo=2023-09&tipo=33",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ventas", "detalle"],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "2023-09"
+                },
+                {
+                  "key": "tipo",
+                  "value": "33"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Compras (Purchases)",
+      "item": [
+        {
+          "name": "Get Purchases Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/compras/resumen?periodo=2023-09",
+              "host": ["{{base_url}}"],
+              "path": ["api", "compras", "resumen"],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "2023-09"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Purchases Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/compras/detalle?periodo=2023-09",
+              "host": ["{{base_url}}"],
+              "path": ["api", "compras", "detalle"],
+              "query": [
+                {
+                  "key": "periodo",
+                  "value": "2023-09"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Contratos (Contracts)",
+      "item": [
+        {
+          "name": "Upload Contract PDF",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/contratos",
+              "host": ["{{base_url}}"],
+              "path": ["api", "contratos"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "/path/to/contract.pdf"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ask Question (RAG)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/contratos/ask",
+              "host": ["{{base_url}}"],
+              "path": ["api", "contratos", "ask"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"¿Mi contrato con ACME sigue vigente?\"\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Agent (WhatsApp)",
+      "item": [
+        {
+          "name": "Send Message to Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer YOUR_AGENT_API_KEY"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/agent/message",
+              "host": ["{{base_url}}"],
+              "path": ["api", "agent", "message"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rut\": \"{{test_rut}}\",\n  \"mensaje\": \"¿Cuánto vendí en septiembre?\"\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/",
+          "host": ["{{base_url}}"],
+          "path": [""]
+        }
+      },
+      "response": []
+    }
+  ]
+}
