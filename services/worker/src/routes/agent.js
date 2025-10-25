@@ -66,9 +66,9 @@ router.post('/message', async (c) => {
       return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
     }
 
-    // Get RUT and name from phone number
+    // Get RUT and name from phone number, solo si el usuario está verificado
     const user = await c.env.DB.prepare(
-      'SELECT rut, nombre FROM contributors WHERE telefono = ?'
+      'SELECT rut, nombre FROM contributors WHERE telefono = ? AND verified = 1'
     ).bind(telefono).first();
 
     if (!user) {

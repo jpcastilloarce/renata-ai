@@ -29,5 +29,8 @@
     "ai"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "form-data": "^4.0.4"
+  }
 }
