@@ -10,10 +10,10 @@ const router = new Hono();
  */
 router.post('/register', async (c) => {
   try {
-    const { rut, password, clave_sii, telefono } = await c.req.json();
+    const { rut, nombre, password, clave_sii, telefono } = await c.req.json();
 
     // Validate input
-    if (!rut || !password || !clave_sii || !telefono) {
+    if (!rut || !nombre || !password || !clave_sii || !telefono) {
       return c.json({ error: 'Faltan campos requeridos' }, 400);
     }
 
@@ -31,8 +31,8 @@ router.post('/register', async (c) => {
 
     // Create user
     await c.env.DB.prepare(
-      'INSERT INTO contributors (rut, password_hash, clave_sii, telefono, verified) VALUES (?, ?, ?, ?, 0)'
-    ).bind(rut, password_hash, clave_sii, telefono).run();
+      'INSERT INTO contributors (rut, nombre, password_hash, clave_sii, telefono, verified) VALUES (?, ?, ?, ?, ?, 0)'
+    ).bind(rut, nombre, password_hash, clave_sii, telefono).run();
 
     // Generate OTP
     const otp_code = generateOTP();

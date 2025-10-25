@@ -3,6 +3,7 @@
 -- Tabla de contribuyentes (usuarios)
 CREATE TABLE contributors (
     rut TEXT PRIMARY KEY,             -- RUT del contribuyente (ej: '76123456-7')
+    nombre TEXT NOT NULL,             -- Nombre del usuario para personalización
     password_hash TEXT NOT NULL,      -- Contraseña de nuestra app (hasheada, ej. bcrypt)
     clave_sii TEXT NOT NULL,          -- Clave del SII en texto plano (para uso interno)
     telefono TEXT NOT NULL,           -- Número de teléfono (WhatsApp) del usuario, formato +56XXXX

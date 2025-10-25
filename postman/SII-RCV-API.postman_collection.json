@@ -52,7 +52,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"rut\": \"76123456-7\",\n  \"password\": \"miclave123\",\n  \"clave_sii\": \"claveSII123\",\n  \"telefono\": \"+56911112222\"\n}"
+              "raw": "{\n  \"rut\": \"76123456-7\",\n  \"nombre\": \"Juan Pérez\",\n  \"password\": \"miclave123\",\n  \"clave_sii\": \"claveSII123\",\n  \"telefono\": \"+56911112222\"\n}"
             }
           },
           "response": []

@@ -1,8 +1,8 @@
 -- seeds.sql: Datos de ejemplo en las tablas
 
 -- 1) Usuario de ejemplo
-INSERT INTO contributors (rut, password_hash, clave_sii, telefono, verified) VALUES
-('76123456-7', '$2b$10$K8...Fh', 'claveSII123', '+56911112222', 1);
+INSERT INTO contributors (rut, nombre, password_hash, clave_sii, telefono, verified) VALUES
+('76123456-7', 'Juan Pérez', '$2a$10$/glBCKZvf5QXnpyUfatfM.UJ3uWUzEcDO3WVSVJYGwkU8ZVfZMS7e', 'claveSII123', '+56911112222', 1);
 
 -- 2) OTP generado para registro (asumir expiración en epoch futuro)
 INSERT INTO otp (rut, code, expires_at) VALUES ('76123456-7', '123456', strftime('%s','now','+5 minutes'));

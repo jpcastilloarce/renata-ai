@@ -35,9 +35,9 @@ router.post('/message', async (c) => {
       return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
     }
 
-    // Get RUT from phone number
+    // Get RUT and name from phone number
     const user = await c.env.DB.prepare(
-      'SELECT rut FROM contributors WHERE telefono = ?'
+      'SELECT rut, nombre FROM contributors WHERE telefono = ?'
     ).bind(telefono).first();
 
     if (!user) {
@@ -47,6 +47,7 @@ router.post('/message', async (c) => {
     }
 
     const rut = user.rut;
+    const nombre = user.nombre;
 
     // Process the question (similar to /api/ask but without auth middleware)
     const questionType = categorizeQuestion(mensaje);
@@ -58,9 +59,9 @@ router.post('/message', async (c) => {
     } else if (questionType === 'contrato' || questionType === 'general') {
       answer = await handleContractQuestion(c.env, rut, mensaje);
     } else if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
-      answer = 'El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.';
+      answer = `Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`;
     } else {
-      answer = 'Hola! Puedo ayudarte con consultas sobre tus ventas, compras y contratos. ¿Qué necesitas saber?';
+      answer = `Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras y contratos. ¿Qué necesitas saber?`;
     }
 
     // Store messages
