@@ -1,8 +1,9 @@
 import express from 'express';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode-terminal';
 import dotenv from 'dotenv';
+import { audioToText, getAudioFromMessage } from './services/elevenLabs.js';
 
 dotenv.config();
 
@@ -12,6 +13,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const WORKER_API_URL = process.env.WORKER_API_URL;
 const AGENT_API_KEY = process.env.AGENT_API_KEY;
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
 // Initialize WhatsApp client with session persistence
 const whatsappClient = new Client({
@@ -60,13 +62,33 @@ whatsappClient.on('message', async (msg) => {
     return;
   }
 
-  console.log(`Mensaje recibido de ${from}: ${body}`);
+  console.log(`Mensaje recibido de ${from}`);
 
   try {
     // Extract phone number from WhatsApp ID (sin @c.us)
     const phoneNumber = from.split('@')[0]; // "56993788826"
 
-    // PASO 1: Determinar si es cliente o prospecto
+    // PASO 1: Detectar tipo de mensaje (texto o audio)
+    const audioInfo = await getAudioFromMessage(msg);
+    let mensajeTexto = body;
+    let tipoMensaje = 'texto';
+
+    if (audioInfo.hasAudio) {
+      console.log(`[AUDIO] Detectado audio de ${phoneNumber}`);
+      tipoMensaje = 'audio';
+
+      // Convertir audio a texto usando ElevenLabs
+      try {
+        mensajeTexto = await audioToText(audioInfo.audioBuffer, ELEVENLABS_API_KEY);
+        console.log(`[AUDIO→TEXTO] Transcripción: ${mensajeTexto.substring(0, 100)}...`);
+      } catch (error) {
+        console.error('Error convirtiendo audio a texto:', error);
+        await msg.reply('No pude procesar tu mensaje de audio. Por favor intenta nuevamente o envía un mensaje de texto.');
+        return;
+      }
+    }
+
+    // PASO 2: Determinar si es cliente o prospecto
     const routeResponse = await fetch(`${WORKER_API_URL}/api/router/identify`, {
       method: 'POST',
       headers: {
@@ -84,7 +106,7 @@ whatsappClient.on('message', async (msg) => {
 
     const { type } = await routeResponse.json(); // 'cliente' o 'prospecto'
 
-    // PASO 2: Enviar a la ruta correspondiente
+    // PASO 3: Enviar a la ruta correspondiente
     const endpoint = type === 'cliente'
       ? '/api/agent/message'      // Tu compañero trabaja aquí
       : '/api/prospecto/message';  // TÚ trabajas aquí
@@ -97,7 +119,8 @@ whatsappClient.on('message', async (msg) => {
       },
       body: JSON.stringify({
         telefono: type === 'cliente' ? `+${phoneNumber}` : phoneNumber,
-        mensaje: body
+        mensaje: mensajeTexto,
+        tipoMensajeOriginal: tipoMensaje // Informar si el mensaje original era audio
       })
     });
 
@@ -108,11 +131,29 @@ whatsappClient.on('message', async (msg) => {
     }
 
     const data = await response.json();
-    const answer = data.respuesta;
 
-    // PASO 3: Enviar respuesta por WhatsApp
-    await msg.reply(answer);
-    console.log(`[${type.toUpperCase()}] Respuesta enviada a ${from}`);
+    // PASO 4: Manejar respuesta (texto o audio)
+    if (data.tipo === 'audio' && data.contenido) {
+      // Respuesta en formato audio
+      console.log(`[AUDIO] Enviando respuesta de audio a ${from}`);
+
+      // Convertir ArrayBuffer/Buffer a base64
+      const audioBase64 = Buffer.from(data.contenido).toString('base64');
+      const audioMedia = new MessageMedia(
+        data.mimeType || 'audio/mpeg',
+        audioBase64,
+        'respuesta.mp3'
+      );
+
+      await whatsappClient.sendMessage(from, audioMedia);
+      console.log(`[${type.toUpperCase()}][AUDIO] Respuesta enviada a ${from}`);
+
+    } else {
+      // Respuesta en formato texto
+      const answer = data.respuesta || data.contenido;
+      await msg.reply(answer);
+      console.log(`[${type.toUpperCase()}][TEXTO] Respuesta enviada a ${from}`);
+    }
 
   } catch (error) {
     console.error('Error procesando mensaje:', error);

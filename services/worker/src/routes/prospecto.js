@@ -13,6 +13,7 @@
 
 import { Hono } from 'hono';
 import { logEvent } from '../utils/logger.js';
+import { formatResponse, actualizarModoSegunInput } from '../utils/responseFormatter.js';
 
 const router = new Hono();
 
@@ -44,30 +45,54 @@ router.use('/*', async (c, next) => {
  */
 router.post('/message', async (c) => {
   try {
-    const { telefono, mensaje } = await c.req.json();
+    const { telefono, mensaje, tipoMensajeOriginal } = await c.req.json();
 
     if (!telefono || !mensaje) {
       return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
+    }
+
+    // Actualizar preferencia de modo si envió audio
+    if (tipoMensajeOriginal === 'audio') {
+      await actualizarModoSegunInput(telefono, 'audio', c.env);
     }
 
     // Verificar si hay una sesión de registro en curso
     const sessionKey = `registro:${telefono}`;
     const session = await c.env.SESSIONS_KV.get(sessionKey, { type: 'json' });
 
-    let respuesta;
+    let respuestaTexto;
 
     if (session) {
       // Continuar proceso de registro
-      respuesta = await handleRegistroFlow(c.env, telefono, mensaje, session);
+      respuestaTexto = await handleRegistroFlow(c.env, telefono, mensaje, session);
     } else {
       // Primera interacción o consulta general
-      respuesta = await handlePrimerMensaje(c.env, telefono, mensaje);
+      respuestaTexto = await handlePrimerMensaje(c.env, telefono, mensaje);
     }
 
     // Log del evento
     await logEvent(c.env.DB, null, 'PROSPECTO_MESSAGE', `${telefono}: ${mensaje.substring(0, 50)}...`);
 
-    return c.json({ respuesta });
+    // ⭐ FORMATEAR RESPUESTA (texto o audio según preferencia del usuario)
+    const respuestaFormateada = await formatResponse({
+      texto: respuestaTexto,
+      telefono,
+      env: c.env
+    });
+
+    // Retornar en formato unificado
+    if (respuestaFormateada.tipo === 'audio') {
+      return c.json({
+        tipo: 'audio',
+        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+        mimeType: respuestaFormateada.mimeType
+      });
+    } else {
+      return c.json({
+        tipo: 'texto',
+        respuesta: respuestaFormateada.contenido
+      });
+    }
 
   } catch (error) {
     console.error('Error en prospecto handler:', error);
