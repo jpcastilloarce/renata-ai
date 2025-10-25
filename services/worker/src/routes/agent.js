@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { logEvent } from '../utils/logger.js';
+import { callOpenAI } from '../utils/openai.js';
 
 const router = new Hono();
 
@@ -178,20 +179,20 @@ async function handleContractQuestion(env, rut, question) {
   const fragments = searchResults.matches.map(match => match.metadata.content);
   const context = fragments.join('\n\n');
 
-  const aiResponse = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
-    messages: [
-      {
-        role: 'system',
-        content: `Eres un asistente que responde preguntas sobre contratos. Usa el siguiente contexto para responder la pregunta del usuario:\n\n${context}`
-      },
-      {
-        role: 'user',
-        content: question
-      }
-    ]
-  });
+  const messages = [
+    {
+      role: 'system',
+      content: `Eres un asistente que responde preguntas sobre contratos. Usa el siguiente contexto para responder la pregunta del usuario:\n\n${context}`
+    },
+    {
+      role: 'user',
+      content: question
+    }
+  ];
 
-  return aiResponse.response || 'No pude generar una respuesta adecuada.';
+  const aiResponse = await callOpenAI(env.OPENAI_API_KEY, messages);
+
+  return aiResponse || 'No pude generar una respuesta adecuada.';
 }
 
 export default router;

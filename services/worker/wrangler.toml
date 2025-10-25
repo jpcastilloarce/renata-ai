@@ -51,3 +51,6 @@ binding = "AI"
 SII_API_BASE = "https://legacy.apigateway.cl/api/v1/sii/rcv"
 WHATSAPP_SERVICE_URL = "https://better-chicken-take.loca.lt"  # Localtunnel URL for WhatsApp service
 AGENT_API_KEY = "12a7035a667ae8f91dfdb9c1b2f4f0b2cff813c6e7b55f26bd7cd9e95bc68f17"  # Secret key for WhatsApp service communication
+
+# Secrets (configure with: wrangler secret put <NAME>)
+# - OPENAI_API_KEY: OpenAI API Key for GPT-4o
