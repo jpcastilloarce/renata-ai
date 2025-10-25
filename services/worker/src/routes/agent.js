@@ -93,16 +93,19 @@ router.post('/message', async (c) => {
       } else if (intent === 'contrato') {
         respuestas.push(await handleContractQuestion(c.env, rut, fragment));
       } else if (intent === 'general') {
-        if (fragment.toLowerCase().includes('f29') || fragment.toLowerCase().includes('vence')) {
-          respuestas.push(`Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`);
+        // Llamada directa a OpenAI (gpt-4o) para que busque en internet
+        const aiFallback = await callOpenAI(c.env.OPENAI_API_KEY, [
+          { role: 'user', content: fragment }
+        ]);
+        if (aiFallback) {
+          respuestas.push(aiFallback);
         } else {
-          respuestas.push(`Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras, detalles y contratos. ¿Qué necesitas saber?`);
+          respuestas.push('No pude encontrar información relevante.');
         }
       }
     }
     // Unir respuestas
-    const answer = respuestas.join('\n\n');
-
+    let answer = respuestas.join('\n\n');
     // Store messages
     await c.env.DB.prepare(
       'INSERT INTO messages (rut, sender, content) VALUES (?, ?, ?)'
