@@ -7,7 +7,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "https://your-worker.workers.dev",
+      "value": "https://sii-rcv-api.juanirc.workers.dev",
       "type": "string"
     },
     {
@@ -18,6 +18,16 @@
     {
       "key": "test_rut",
       "value": "76123456-7",
+      "type": "string"
+    },
+    {
+      "key": "test_phone",
+      "value": "+56911112222",
+      "type": "string"
+    },
+    {
+      "key": "agent_api_key",
+      "value": "12a7035a667ae8f91dfdb9c1b2f4f0b2cff813c6e7b55f26bd7cd9e95bc68f17",
       "type": "string"
     }
   ],
@@ -267,7 +277,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"question\": \"¿Mi contrato con ACME sigue vigente?\"\n}"
+              "raw": "{\n  \"question\": \"¿Cuál es el valor mensual del servicio?\"\n}"
             }
           },
           "response": []
@@ -284,7 +294,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer YOUR_AGENT_API_KEY"
+                "value": "Bearer {{agent_api_key}}"
               },
               {
                 "key": "Content-Type",
@@ -298,7 +308,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"rut\": \"{{test_rut}}\",\n  \"mensaje\": \"¿Cuánto vendí en septiembre?\"\n}"
+              "raw": "{\n  \"telefono\": \"{{test_phone}}\",\n  \"mensaje\": \"¿Cuánto vendí en septiembre 2023?\"\n}"
             }
           },
           "response": []
