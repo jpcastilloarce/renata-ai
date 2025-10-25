@@ -80,22 +80,26 @@ router.post('/message', async (c) => {
     const rut = user.rut;
     const nombre = user.nombre;
 
-    // Process the question (similar to /api/ask but without auth middleware)
-    const questionType = categorizeQuestion(mensaje);
-
-    let answer = '';
-
-    if (questionType === 'ventas' || questionType === 'compras') {
-      answer = await handleTaxQuestion(c.env, rut, mensaje, questionType);
-    } else if (questionType === 'detalle_ventas' || questionType === 'detalle_compras') {
-      answer = await handleDetailQuestion(c.env, rut, mensaje, questionType);
-    } else if (questionType === 'contrato' || questionType === 'general') {
-      answer = await handleContractQuestion(c.env, rut, mensaje);
-    } else if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
-      answer = `Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`;
-    } else {
-      answer = `Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras, detalles y contratos. ¿Qué necesitas saber?`;
+    // Detectar todas las intenciones
+    const intents = detectIntents(mensaje);
+    let respuestas = [];
+    for (const intent of intents) {
+      if (intent === 'ventas' || intent === 'compras') {
+        respuestas.push(await handleTaxQuestion(c.env, rut, mensaje, intent));
+      } else if (intent === 'detalle_ventas' || intent === 'detalle_compras') {
+        respuestas.push(await handleDetailQuestion(c.env, rut, mensaje, intent));
+      } else if (intent === 'contrato') {
+        respuestas.push(await handleContractQuestion(c.env, rut, mensaje));
+      } else if (intent === 'general') {
+        if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
+          respuestas.push(`Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`);
+        } else {
+          respuestas.push(`Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras, detalles y contratos. ¿Qué necesitas saber?`);
+        }
+      }
     }
+    // Unir respuestas
+    const answer = respuestas.join('\n\n');
 
     // Store messages
     await c.env.DB.prepare(
@@ -112,6 +116,19 @@ router.post('/message', async (c) => {
     return c.json({ error: 'Error al procesar mensaje' }, 500);
   }
 });
+
+// Detecta todas las intenciones presentes en la pregunta
+function detectIntents(question) {
+  const lower = question.toLowerCase();
+  const intents = [];
+  if (lower.match(/detalle.*(venta|factur)/) || lower.match(/(venta|factur).*detalle/)) intents.push('detalle_ventas');
+  if (lower.match(/detalle.*(compra|proveedor)/) || lower.match(/(compra|proveedor).*detalle/)) intents.push('detalle_compras');
+  if ((lower.includes('vendí') || (lower.includes('venta') && !lower.includes('detalle')) || lower.includes('factur')) && !intents.includes('ventas')) intents.push('ventas');
+  if ((lower.includes('compré') || (lower.includes('compra') && !lower.includes('detalle')) || lower.includes('proveedor')) && !intents.includes('compras')) intents.push('compras');
+  if (lower.includes('contrato') || lower.includes('cláusula') || lower.includes('vigente') || lower.includes('normativa')) intents.push('contrato');
+  if (intents.length === 0) intents.push('general');
+  return intents;
+}
 
 // Helper functions (duplicated from contratos.js for modularity)
 
