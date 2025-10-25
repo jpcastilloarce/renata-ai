@@ -18,7 +18,10 @@ export async function fetchVentasResumen(env, rut, claveSII, periodo) {
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SII_API_TOKEN}`
+      },
       body: JSON.stringify(payload)
     });
 
@@ -55,7 +58,10 @@ export async function fetchVentasDetalle(env, rut, claveSII, periodo, dte = 0) {
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SII_API_TOKEN}`
+      },
       body: JSON.stringify(payload)
     });
 
@@ -92,7 +98,10 @@ export async function fetchComprasResumen(env, rut, claveSII, periodo, estado = 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SII_API_TOKEN}`
+      },
       body: JSON.stringify(payload)
     });
 
@@ -129,7 +138,10 @@ export async function fetchComprasDetalle(env, rut, claveSII, periodo, dte = 0) 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SII_API_TOKEN}`
+      },
       body: JSON.stringify(payload)
     });
 
