@@ -66,15 +66,10 @@ whatsappClient.on('message', async (msg) => {
     // Extract phone number from WhatsApp ID
     const phoneNumber = from.split('@')[0];
 
-    // Get user RUT from database via Worker API
-    const rut = await getRutByPhone(phoneNumber);
+    // Format phone number with + prefix
+    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
 
-    if (!rut) {
-      await msg.reply('Usuario no registrado. Por favor regístrate en la plataforma primero.');
-      return;
-    }
-
-    // Send question to Worker API
+    // Send question to Worker API (Worker will look up RUT by phone)
     const response = await fetch(`${WORKER_API_URL}/api/agent/message`, {
       method: 'POST',
       headers: {
@@ -82,7 +77,7 @@ whatsappClient.on('message', async (msg) => {
         'Authorization': `Bearer ${AGENT_API_KEY}`
       },
       body: JSON.stringify({
-        rut,
+        telefono: formattedPhone,
         mensaje: body
       })
     });

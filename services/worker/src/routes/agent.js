@@ -29,22 +29,24 @@ router.use('/*', async (c, next) => {
  */
 router.post('/message', async (c) => {
   try {
-    const { rut, mensaje } = await c.req.json();
+    const { telefono, mensaje } = await c.req.json();
 
-    if (!rut || !mensaje) {
-      return c.json({ error: 'Se requiere RUT y mensaje' }, 400);
+    if (!telefono || !mensaje) {
+      return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
     }
 
-    // Verify user exists
+    // Get RUT from phone number
     const user = await c.env.DB.prepare(
-      'SELECT rut FROM contributors WHERE rut = ?'
-    ).bind(rut).first();
+      'SELECT rut FROM contributors WHERE telefono = ?'
+    ).bind(telefono).first();
 
     if (!user) {
       return c.json({
         respuesta: 'Usuario no registrado. Por favor regístrate en la plataforma primero.'
       });
     }
+
+    const rut = user.rut;
 
     // Process the question (similar to /api/ask but without auth middleware)
     const questionType = categorizeQuestion(mensaje);
