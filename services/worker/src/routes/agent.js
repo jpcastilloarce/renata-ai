@@ -87,12 +87,14 @@ router.post('/message', async (c) => {
 
     if (questionType === 'ventas' || questionType === 'compras') {
       answer = await handleTaxQuestion(c.env, rut, mensaje, questionType);
+    } else if (questionType === 'detalle_ventas' || questionType === 'detalle_compras') {
+      answer = await handleDetailQuestion(c.env, rut, mensaje, questionType);
     } else if (questionType === 'contrato' || questionType === 'general') {
       answer = await handleContractQuestion(c.env, rut, mensaje);
     } else if (mensaje.toLowerCase().includes('f29') || mensaje.toLowerCase().includes('vence')) {
       answer = `Hola ${nombre}! El Formulario 29 (IVA) vence el día 12 del mes siguiente al período declarado, excepto si cae en fin de semana o festivo.`;
     } else {
-      answer = `Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras y contratos. ¿Qué necesitas saber?`;
+      answer = `Hola ${nombre}! Puedo ayudarte con consultas sobre tus ventas, compras, detalles y contratos. ¿Qué necesitas saber?`;
     }
 
     // Store messages
@@ -116,14 +118,26 @@ router.post('/message', async (c) => {
 function categorizeQuestion(question) {
   const lowerQuestion = question.toLowerCase();
 
-  if (lowerQuestion.includes('vendí') || lowerQuestion.includes('venta') || lowerQuestion.includes('factur')) {
+  // Detalle de ventas
+  if (lowerQuestion.includes('detalle') && (lowerQuestion.includes('venta') || lowerQuestion.includes('factur'))) {
+    return 'detalle_ventas';
+  }
+  // Detalle de compras
+  if (lowerQuestion.includes('detalle') && (lowerQuestion.includes('compra') || lowerQuestion.includes('proveedor'))) {
+    return 'detalle_compras';
+  }
+  // Ventas
+  if (lowerQuestion.includes('vendí') || (lowerQuestion.includes('venta') && !lowerQuestion.includes('detalle')) || lowerQuestion.includes('factur')) {
     return 'ventas';
-  } else if (lowerQuestion.includes('compré') || lowerQuestion.includes('compra') || lowerQuestion.includes('proveedor')) {
+  }
+  // Compras
+  if (lowerQuestion.includes('compré') || (lowerQuestion.includes('compra') && !lowerQuestion.includes('detalle')) || lowerQuestion.includes('proveedor')) {
     return 'compras';
-  } else if (lowerQuestion.includes('contrato') || lowerQuestion.includes('cláusula') || lowerQuestion.includes('vigente')) {
+  }
+  // Contratos
+  if (lowerQuestion.includes('contrato') || lowerQuestion.includes('cláusula') || lowerQuestion.includes('vigente') || lowerQuestion.includes('normativa')) {
     return 'contrato';
   }
-
   return 'general';
 }
 
@@ -223,6 +237,72 @@ async function handleContractQuestion(env, rut, question) {
   const aiResponse = await callOpenAI(env.OPENAI_API_KEY, messages);
 
   return aiResponse || 'No pude generar una respuesta adecuada.';
+}
+
+// Handler para detalle de ventas y compras
+async function handleDetailQuestion(env, rut, question, type) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+  let periodo = null;
+  let monthNum = null;
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+  if (monthNum) {
+    periodo = `${year}-${monthNum}`;
+  }
+  // Selección de tabla y campos
+  let table, label, selectFields, formatRow;
+  if (type === 'detalle_ventas') {
+    table = 'ventas_detalle';
+    label = 'ventas';
+    selectFields = 'detTipoDoc, detNroDoc, detRznSoc, detMntTotal';
+    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: CLP ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
+  } else {
+    table = 'compras_detalle';
+    label = 'compras';
+    selectFields = 'detTipoDoc, detNroDoc, detRznSoc, detMntTotal';
+    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: CLP ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
+  }
+  if (!periodo) {
+    // Si no hay periodo, buscar el último disponible
+    const { results } = await env.DB.prepare(`
+      SELECT periodo, COUNT(*) as cantidad
+      FROM ${table}
+      WHERE rut = ?
+      GROUP BY periodo
+      ORDER BY periodo DESC
+      LIMIT 1
+    `).bind(rut).all();
+    if (results.length > 0 && results[0].cantidad) {
+      const [year, month] = results[0].periodo.split('-');
+      const monthName = Object.keys(months).find(key => months[key] === month);
+      return `Tu último detalle de ${label} fue en ${monthName} ${year} con ${results[0].cantidad} documentos.`;
+    }
+    return `No encontré detalles de ${label} en tu historial.`;
+  }
+  // Buscar detalle para el periodo
+  const { results } = await env.DB.prepare(`
+    SELECT ${selectFields}
+    FROM ${table}
+    WHERE rut = ? AND periodo = ?
+    ORDER BY detMntTotal DESC
+    LIMIT 5
+  `).bind(rut, periodo).all();
+  if (results.length > 0) {
+    const monthName = Object.keys(months).find(key => months[key] === monthNum);
+    let detalle = results.map(formatRow).join('\n');
+    return `Detalle de ${label} para ${monthName} ${year}:\n${detalle}`;
+  }
+  return `No encontré detalles de ${label} para ${monthNum ? Object.keys(months).find(key => months[key] === monthNum) : ''} ${year}.`;
 }
 
 export default router;
