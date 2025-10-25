@@ -104,8 +104,16 @@ router.post('/message', async (c) => {
         }
       }
     }
-    // Unir respuestas
+    // Post-procesamiento para insights adicionales
     let answer = respuestas.join('\n\n');
+    answer = await postProcessCombinedAnswer({
+      respuestas,
+      mensaje,
+      rut,
+      nombre,
+      fechaActual: new Date(),
+    });
+
     // Store messages
     await c.env.DB.prepare(
       'INSERT INTO messages (rut, sender, content) VALUES (?, ?, ?)'
@@ -116,6 +124,30 @@ router.post('/message', async (c) => {
     ).bind(rut, 'agent', answer).run();
 
     return c.json({ respuesta: answer });
+// Post-procesamiento de respuestas combinadas para entregar insights adicionales
+async function postProcessCombinedAnswer({ respuestas, mensaje, rut, nombre, fechaActual }) {
+  let combined = respuestas.join('\n\n');
+  // Buscar si hay respuesta de ventas con monto
+  const ventaRegex = /(?:vendiste|ventas).*?CLP\s*([\d\.\,]+)/i;
+  const matchVenta = combined.match(ventaRegex);
+  let iva = null;
+  if (matchVenta) {
+    // Extraer monto de ventas
+    let montoStr = matchVenta[1].replace(/\./g, '').replace(/,/g, '');
+    let monto = parseInt(montoStr, 10);
+    if (!isNaN(monto) && monto > 0) {
+      iva = Math.round(monto * 0.19);
+      combined += `\n\n💡 Estimación de IVA: Por tus ventas, deberías declarar un IVA aproximado de CLP ${iva.toLocaleString('es-CL')}.`;
+      // Agregar recordatorio de pago si estamos cerca de fin de mes
+      const dia = fechaActual.getDate();
+      if (dia >= 20 && dia <= 31) {
+        combined += '\n🔔 Recuerda: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.';
+      }
+    }
+  }
+  // Se puede extender para compras, contratos, etc.
+  return combined;
+}
   } catch (error) {
     console.error('Error processing agent message:', error);
     return c.json({ error: 'Error al procesar mensaje' }, 500);
