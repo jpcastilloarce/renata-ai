@@ -125,13 +125,17 @@ router.post('/message', async (c) => {
 // Detecta todas las intenciones presentes en la pregunta
 function detectIntents(question) {
   const lower = question.toLowerCase();
+  const fragments = question.split(/\s+y\s+|\.\s+|\?\s+/i).map(f => f.trim()).filter(Boolean);
   const intents = [];
-  if (lower.match(/detalle.*(venta|factur)/) || lower.match(/(venta|factur).*detalle/)) intents.push('detalle_ventas');
-  if (lower.match(/detalle.*(compra|proveedor)/) || lower.match(/(compra|proveedor).*detalle/)) intents.push('detalle_compras');
-  if ((lower.includes('vendí') || (lower.includes('venta') && !lower.includes('detalle')) || lower.includes('factur')) && !intents.includes('ventas')) intents.push('ventas');
-  if ((lower.includes('compré') || (lower.includes('compra') && !lower.includes('detalle')) || lower.includes('proveedor')) && !intents.includes('compras')) intents.push('compras');
-  if (lower.includes('contrato') || lower.includes('cláusula') || lower.includes('vigente') || lower.includes('normativa')) intents.push('contrato');
-  if (intents.length === 0) intents.push('general');
+  for (const fragment of fragments) {
+    const l = fragment.toLowerCase();
+    if (l.match(/detalle.*(venta|factur)/) || l.match(/(venta|factur).*detalle/)) intents.push('detalle_ventas');
+    else if (l.match(/detalle.*(compra|proveedor)/) || l.match(/(compra|proveedor).*detalle/)) intents.push('detalle_compras');
+    else if ((l.includes('vendí') || (l.includes('venta') && !l.includes('detalle')) || l.includes('factur'))) intents.push('ventas');
+    else if ((l.includes('compré') || (l.includes('compra') && !l.includes('detalle')) || l.includes('proveedor'))) intents.push('compras');
+    else if (l.includes('contrato') || l.includes('cláusula') || l.includes('vigente') || l.includes('normativa')) intents.push('contrato');
+    else intents.push('general');
+  }
   return intents;
 }
 
