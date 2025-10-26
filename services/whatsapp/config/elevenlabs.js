@@ -2,12 +2,19 @@
  * Configuracion de ElevenLabs para el servicio WhatsApp
  */
 
-const { ElevenLabsClient } = require('elevenlabs');
+import { ElevenLabsClient } from 'elevenlabs';
 
-// Inicializar cliente de ElevenLabs con API key desde variables de entorno
-const elevenLabsClient = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY
-});
+// Cliente lazy initialization
+let _elevenLabsClient = null;
+
+function getElevenLabsClient() {
+  if (!_elevenLabsClient) {
+    _elevenLabsClient = new ElevenLabsClient({
+      apiKey: process.env.ELEVENLABS_API_KEY
+    });
+  }
+  return _elevenLabsClient;
+}
 
 // Configuracion de voz
 const VOICE_CONFIG = {
@@ -21,7 +28,17 @@ const VOICE_CONFIG = {
   }
 };
 
-module.exports = {
+// Export via getter to maintain lazy initialization
+const elevenLabsClient = {
+  get textToSpeech() {
+    return getElevenLabsClient().textToSpeech;
+  },
+  get speechToText() {
+    return getElevenLabsClient().speechToText;
+  }
+};
+
+export {
   elevenLabsClient,
   VOICE_CONFIG
 };

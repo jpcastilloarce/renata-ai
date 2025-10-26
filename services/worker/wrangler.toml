@@ -55,3 +55,5 @@ AGENT_API_KEY = "12a7035a667ae8f91dfdb9c1b2f4f0b2cff813c6e7b55f26bd7cd9e95bc68f1
 # Secrets (configure with: wrangler secret put <NAME>)
 # - OPENAI_API_KEY: OpenAI API Key for GPT-4o
 # - SII_API_TOKEN: Bearer token for apigateway.cl SII API
+# - ELEVENLABS_API_KEY: ElevenLabs API Key for text-to-speech
+# - ELEVENLABS_VOICE_ID: ElevenLabs Voice ID for audio generation

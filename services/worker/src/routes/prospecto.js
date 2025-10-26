@@ -240,7 +240,7 @@ router.post('/message', async (c) => {
 
       // Guardar en historial
       await saveToConversationHistory(c.env.DB, telefono, mensaje, mensajeBienvenida);
-
+      
       // Formatear respuesta (texto o audio)
       const respuestaFormateada = await formatResponse({
         texto: mensajeBienvenida,

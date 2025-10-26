@@ -3,9 +3,7 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode-terminal';
 import dotenv from 'dotenv';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const { convertirAudioATexto, convertirTextoAAudio, getAudioFromMessage } = require('./services/elevenLabs.js');
+import { convertirAudioATexto, convertirTextoAAudio, getAudioFromMessage } from './services/elevenLabs.js';
 
 dotenv.config();
 

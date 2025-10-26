@@ -8,9 +8,9 @@
  * - getAudioFromMessage: Extrae audio de mensajes de WhatsApp
  */
 
-const fs = require('fs');
-const { elevenLabsClient, VOICE_CONFIG } = require('../config/elevenlabs');
-const { Blob } = require('buffer');
+import fs from 'fs';
+import { elevenLabsClient, VOICE_CONFIG } from '../config/elevenlabs.js';
+import { Blob } from 'buffer';
 
 /**
  * Convierte un archivo de audio a texto usando ElevenLabs Speech-to-Text
@@ -39,23 +39,35 @@ async function convertirAudioATexto(audioInput, fileName = 'audio.ogg') {
     else if (fileName.endsWith('.wav')) mimeType = 'audio/wav';
     else if (fileName.endsWith('.ogg')) mimeType = 'audio/ogg';
 
-    // Convertir Buffer a Blob (segun documentacion de ElevenLabs)
+    // Crear FormData para enviar a la API
+    const formData = new FormData();
+
+    // Convertir Buffer a Blob y agregarlo al FormData
     const audioBlob = new Blob([audioBuffer], { type: mimeType });
+    formData.append('file', audioBlob, fileName);
+    formData.append('model_id', 'scribe_v1');
+    formData.append('language_code', 'spa');
 
-    console.log('[Speech-to-Text] Blob creado, tipo:', mimeType);
+    console.log('[Speech-to-Text] Enviando request a ElevenLabs API...');
 
-    // Llamar a ElevenLabs Speech-to-Text API segun documentacion oficial
-    const transcription = await elevenLabsClient.speechToText.convert({
-      file: audioBlob,
-      modelId: 'scribe_v1', // Modelo de transcripcion
-      languageCode: 'spa', // Español
-      tagAudioEvents: false, // No necesitamos etiquetar eventos de audio
-      diarize: false // No necesitamos identificar quien habla
+    // Llamar directamente a la API REST de ElevenLabs
+    const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      method: 'POST',
+      headers: {
+        'xi-api-key': process.env.ELEVENLABS_API_KEY
+      },
+      body: formData
     });
 
-    console.log('[Speech-to-Text] Transcripcion completada:', transcription.text);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error (${response.status}): ${errorText}`);
+    }
 
-    return transcription.text;
+    const result = await response.json();
+    console.log('[Speech-to-Text] Transcripcion completada:', result.text);
+
+    return result.text;
 
   } catch (error) {
     console.error('[Speech-to-Text] Error al convertir audio a texto:', error.message);
@@ -136,7 +148,7 @@ async function getAudioFromMessage(msg) {
   }
 }
 
-module.exports = {
+export {
   convertirAudioATexto,
   convertirTextoAAudio,
   getAudioFromMessage

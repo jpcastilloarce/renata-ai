@@ -204,6 +204,12 @@ router.post('/message', async (c) => {
     ).bind(rut, 'agent', answer).run();
 
     return c.json({ respuesta: answer });
+  } catch (error) {
+    console.error('Error processing agent message:', error);
+    return c.json({ error: 'Error al procesar mensaje' }, 500);
+  }
+});
+
 // Post-procesamiento de respuestas combinadas para entregar insights adicionales
 async function postProcessCombinedAnswer({ respuestas, mensaje, rut, nombre, fechaActual }) {
   let combined = respuestas.join('\n\n');
@@ -228,11 +234,6 @@ async function postProcessCombinedAnswer({ respuestas, mensaje, rut, nombre, fec
   // Se puede extender para compras, contratos, etc.
   return combined;
 }
-  } catch (error) {
-    console.error('Error processing agent message:', error);
-    return c.json({ error: 'Error al procesar mensaje' }, 500);
-  }
-});
 
 // Detecta todas las intenciones presentes en la pregunta
 function detectIntents(question) {
