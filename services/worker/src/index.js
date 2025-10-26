@@ -6,7 +6,9 @@ import comprasRoutes from './routes/compras.js';
 import contratosRoutes from './routes/contratos.js';
 import agentRoutes from './routes/agent.js';
 import prospectoRoutes from './routes/prospecto.js';
+import prospectoClaudeRoutes from './routes/prospecto-claude.js';
 import routerRoutes from './routes/router.js';
+import internalRoutes from './routes/internal.js';
 import { handleQueueMessage } from './services/queue.js';
 
 const app = new Hono();
@@ -40,7 +42,14 @@ app.route('/api/agent', agentRoutes);
 app.route('/api/router', routerRoutes);
 
 // Prospecto routes (usuarios no registrados)
+// Ruta original con OpenAI
 app.route('/api/prospecto', prospectoRoutes);
+
+// Ruta nueva con Claude + MCP
+app.route('/api/prospecto-claude', prospectoClaudeRoutes);
+
+// Internal routes (para uso del servidor MCP)
+app.route('/api/internal', internalRoutes);
 
 export default {
   // Handle HTTP requests

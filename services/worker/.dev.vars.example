@@ -1,0 +1,14 @@
+# .dev.vars - Variables de entorno para desarrollo local con wrangler dev
+# Copiar a .dev.vars y completar con tus credenciales
+
+# Anthropic (Claude)
+ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# OpenAI (para agente de clientes registrados)
+OPENAI_API_KEY=sk-...
+
+# SII API
+SII_API_TOKEN=Bearer your-sii-token-here
+
+# ElevenLabs
+ELEVENLABS_API_KEY=your-elevenlabs-key

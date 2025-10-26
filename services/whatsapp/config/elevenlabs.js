@@ -18,7 +18,7 @@ function getElevenLabsClient() {
 
 // Configuracion de voz
 const VOICE_CONFIG = {
-  voiceId: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL', // Voz femenina en español por defecto
+  voiceId: 'EXAVITQu4vr4xnSDxMaL', // Voz femenina en español por defecto
   modelId: 'eleven_multilingual_v2', // Modelo multilingüe v2 (mejor para español)
   voiceSettings: {
     stability: 0.5,

@@ -114,7 +114,7 @@ whatsappClient.on('message', async (msg) => {
     // PASO 3: Enviar a la ruta correspondiente
     const endpoint = type === 'cliente'
       ? '/api/agent/message'      // Tu compañero trabaja aquí
-      : '/api/prospecto/message';  // TÚ trabajas aquí
+      : '/api/prospecto-claude/message';  // Nueva ruta con Claude + MCP
 
     console.log(`[WHATSAPP] Endpoint a llamar: ${endpoint}`);
     console.log(`[WHATSAPP] Teléfono a enviar: "${phoneNumber}"`);

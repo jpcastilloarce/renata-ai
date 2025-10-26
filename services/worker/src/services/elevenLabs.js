@@ -130,35 +130,3 @@ export async function getVoices(apiKey) {
   }
 }
 
-/**
- * Voces recomendadas en español
- */
-export const VOCES_ESPANOL = {
-  FEMENINA: 'EXAVITQu4vr4xnSDxMaL', // Bella (femenina, cálida)
-  MASCULINA: 'pNInz6obpgDQGcFmaJgB', // Adam (masculino, profesional)
-  NEUTRAL: 'ErXwobaYiN019PkySvjV', // Antoni (neutral, clara)
-};
-
-/**
- * Configuraciones de voz predefinidas
- */
-export const VOICE_PRESETS = {
-  PROFESIONAL: {
-    stability: 0.7,
-    similarity_boost: 0.8,
-    style: 0.0,
-    use_speaker_boost: true
-  },
-  AMIGABLE: {
-    stability: 0.5,
-    similarity_boost: 0.75,
-    style: 0.3,
-    use_speaker_boost: true
-  },
-  CLARA: {
-    stability: 0.8,
-    similarity_boost: 0.9,
-    style: 0.0,
-    use_speaker_boost: true
-  }
-};

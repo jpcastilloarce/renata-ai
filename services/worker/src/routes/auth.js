@@ -5,16 +5,62 @@ import { logEvent } from '../utils/logger.js';
 const router = new Hono();
 
 /**
+ * Sanitiza un número de teléfono removiendo caracteres no numéricos
+ * Ejemplos:
+ * - "+56993788826" → "56993788826"
+ * - "56-993-788-826" → "56993788826"
+ * - "56 9 9378 8826" → "56993788826"
+ */
+function sanitizePhone(phone) {
+  if (!phone) return null;
+  return phone.replace(/[^0-9]/g, '');
+}
+
+/**
  * POST /api/register
  * Register a new contributor with OTP verification via WhatsApp
  */
 router.post('/register', async (c) => {
   try {
-    const { rut, nombre, password, clave_sii, telefono } = await c.req.json();
+    const { rut, nombre, password, clave_sii, telefono, codigo_activacion, telefono_whatsapp } = await c.req.json();
 
     // Validate input
     if (!rut || !nombre || !password || !clave_sii || !telefono) {
       return c.json({ error: 'Faltan campos requeridos' }, 400);
+    }
+
+    // Sanitizar teléfonos (remover +, espacios, guiones, etc)
+    const telefonoSanitized = sanitizePhone(telefono);
+    const telefonoWhatsappSanitized = sanitizePhone(telefono_whatsapp);
+
+    // Si se registra desde WhatsApp pero el teléfono no coincide
+    if (telefonoWhatsappSanitized && telefonoSanitized !== telefonoWhatsappSanitized) {
+      return c.json({
+        error: 'Por favor regístrate usando el número de WhatsApp de tu empresa. El número proporcionado no coincide con el número desde el cual estás escribiendo.'
+      }, 400);
+    }
+
+    // Si se proporciona código de activación, validarlo
+    if (codigo_activacion) {
+      const codeRecord = await c.env.DB.prepare(
+        'SELECT code, used, expires_at FROM activation_codes WHERE code = ?'
+      ).bind(codigo_activacion).first();
+
+      if (!codeRecord) {
+        return c.json({ error: 'Código de activación inválido' }, 400);
+      }
+
+      if (codeRecord.used === 1) {
+        return c.json({ error: 'Código de activación ya fue utilizado' }, 400);
+      }
+
+      if (codeRecord.expires_at) {
+        const expirationDate = new Date(codeRecord.expires_at);
+        const now = new Date();
+        if (now > expirationDate) {
+          return c.json({ error: 'Código de activación expirado' }, 400);
+        }
+      }
     }
 
     // Check if user already exists
@@ -29,12 +75,33 @@ router.post('/register', async (c) => {
     // Hash password
     const password_hash = await hashPassword(password);
 
-    // Create user
-    await c.env.DB.prepare(
-      'INSERT INTO contributors (rut, nombre, password_hash, clave_sii, telefono, verified) VALUES (?, ?, ?, ?, ?, 0)'
-    ).bind(rut, nombre, password_hash, clave_sii, telefono).run();
+    // Determinar si auto-verificar: Si viene desde WhatsApp y los teléfonos coinciden
+    const autoVerified = telefonoWhatsappSanitized && telefonoSanitized === telefonoWhatsappSanitized ? 1 : 0;
 
-    // Generate OTP
+    // Create user (guardando teléfono sanitizado - solo números)
+    await c.env.DB.prepare(
+      'INSERT INTO contributors (rut, nombre, password_hash, clave_sii, telefono, verified) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(rut, nombre, password_hash, clave_sii, telefonoSanitized, autoVerified).run();
+
+    // Si hay código de activación, marcarlo como usado
+    if (codigo_activacion) {
+      await c.env.DB.prepare(
+        'UPDATE activation_codes SET used = 1, used_by_rut = ? WHERE code = ?'
+      ).bind(rut, codigo_activacion).run();
+    }
+
+    // Si ya está auto-verificado (registro desde WhatsApp con teléfono coincidente)
+    if (autoVerified === 1) {
+      await logEvent(c.env.DB, rut, 'REGISTER', 'Usuario registrado y auto-verificado vía WhatsApp');
+
+      return c.json({
+        message: 'Usuario registrado exitosamente. Tu cuenta ya está verificada y lista para usar.',
+        rut,
+        verified: true
+      }, 201);
+    }
+
+    // Si NO está auto-verificado, generar y enviar OTP
     const otp_code = generateOTP();
     const expires_at = Math.floor(Date.now() / 1000) + 300; // 5 minutes
 
@@ -52,7 +119,7 @@ router.post('/register', async (c) => {
           'Authorization': `Bearer ${c.env.AGENT_API_KEY}`
         },
         body: JSON.stringify({
-          telefono,
+          telefono: telefonoSanitized,
           codigo: otp_code
         })
       });
@@ -69,7 +136,8 @@ router.post('/register', async (c) => {
 
     return c.json({
       message: 'Usuario registrado exitosamente. Código OTP enviado por WhatsApp.',
-      rut
+      rut,
+      verified: false
     }, 201);
   } catch (error) {
     console.error('Registration error:', error);

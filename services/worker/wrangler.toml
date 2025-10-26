@@ -7,13 +7,13 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "rcv_db"
-database_id = "975a1839-c13c-414c-8794-a41654d615c3"  # Replace with actual ID after creating D1 database
+database_id = "70bbe9fc-46f4-42a6-84c4-cd8bd94a9d52"
 preview_database_id = "975a1839-c13c-414c-8794-a41654d615c3"  # Use production DB in dev mode
 
 # KV namespace for sessions
 [[kv_namespaces]]
 binding = "SESSIONS_KV"
-id = "d84a6633a72349278fc52c680f19befe"  # Replace with actual ID after creating KV namespace
+id = "719a8c3bb7c945d8a5cb15af5aad0c7d"  # Replace with actual ID after creating KV namespace
 preview_id = "d84a6633a72349278fc52c680f19befe"  # Use production KV in dev mode
 
 # R2 bucket for contract PDFs
@@ -50,10 +50,12 @@ binding = "AI"
 [vars]
 SII_API_BASE = "https://legacy.apigateway.cl/api/v1/sii/rcv"
 WHATSAPP_SERVICE_URL = "https://better-chicken-take.loca.lt"  # Localtunnel URL for WhatsApp service
+MCP_SERVER_URL = "http://localhost:3001/mcp"  # URL del servidor MCP (cambiar en producción)
 AGENT_API_KEY = "12a7035a667ae8f91dfdb9c1b2f4f0b2cff813c6e7b55f26bd7cd9e95bc68f17"  # Secret key for WhatsApp service communication
 
 # Secrets (configure with: wrangler secret put <NAME>)
-# - OPENAI_API_KEY: OpenAI API Key for GPT-4o
+# - ANTHROPIC_API_KEY: Anthropic API Key for Claude
+# - OPENAI_API_KEY: OpenAI API Key for GPT-4o (usado en agente de clientes)
 # - SII_API_TOKEN: Bearer token for apigateway.cl SII API
 # - ELEVENLABS_API_KEY: ElevenLabs API Key for text-to-speech
 # - ELEVENLABS_VOICE_ID: ElevenLabs Voice ID for audio generation
