@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { logEvent } from '../utils/logger.js';
 import { callOpenAI } from '../utils/openai.js';
+import { formatResponse } from '../utils/responseFormatter.js';
 
 const router = new Hono();
 
@@ -27,6 +28,9 @@ Limitaciones:
 - NO puedes realizar trámites directamente en el SII
 - NO das asesoría legal específica (recomiendas consultar con un contador)
 - NO tienes acceso a información que no esté en tu base de datos
+- NO respondas con iconos o emojis en las respuestas
+- Usa máximo 3 linésas por respuesta ya que es una respuesta para WhatsApp
+- Los números respóndelos en formato texto (ej: doscientos mil)
 
 Cuando respondas:
 1. Sé concisa pero completa
@@ -34,6 +38,46 @@ Cuando respondas:
 3. Ofrece información adicional relacionada cuando sea útil
 4. Si el usuario pregunta algo fuera de tu expertise, sugiere dónde puede encontrar ayuda`;
 
+
+/**
+ * Formatea la respuesta según el origen de la solicitud
+ * @param {string} textoRespuesta - Texto de la respuesta a formatear
+ * @param {string} telefono - Número de teléfono del usuario
+ * @param {string} source - Origen: 'whatsapp' | 'api'
+ * @param {Object} env - Environment variables
+ * @returns {Promise<Object>} - Respuesta formateada según el origen
+ */
+async function formatearRespuestaSegunOrigen(textoRespuesta, telefono, source, env) {
+  // Si viene de WhatsApp, convertir a audio
+  if (source === 'whatsapp') {
+    const respuestaFormateada = await formatResponse({
+      texto: textoRespuesta,
+      telefono,
+      env,
+      userMode: 'audio'
+    });
+
+    // Formatear respuesta para WhatsApp
+    if (respuestaFormateada.tipo === 'audio') {
+      return {
+        tipo: 'audio',
+        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+        mimeType: respuestaFormateada.mimeType
+      };
+    }
+
+    // Fallback a texto si hay error en conversión
+    return {
+      tipo: 'texto',
+      respuesta: textoRespuesta
+    };
+  }
+
+  // Para API/Postman, retornar texto plano (formato anterior)
+  return {
+    respuesta: textoRespuesta
+  };
+}
 
 /**
  * Agent middleware - validate API key
@@ -61,7 +105,12 @@ router.use('/*', async (c, next) => {
  */
 router.post('/message', async (c) => {
   try {
-    const { telefono, mensaje } = await c.req.json();
+    const { telefono, mensaje, source = 'api' } = await c.req.json();
+
+    console.log(`[AGENT] === INICIO REQUEST ===`);
+    console.log(`[AGENT] Teléfono: ${telefono}`);
+    console.log(`[AGENT] Mensaje: "${mensaje}"`);
+    console.log(`[AGENT] Source: ${source}`);
 
     if (!telefono || !mensaje) {
       return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
@@ -71,6 +120,8 @@ router.post('/message', async (c) => {
     const user = await c.env.DB.prepare(
       'SELECT rut, nombre FROM contributors WHERE telefono = ? AND verified = 1'
     ).bind(telefono).first();
+
+    console.log(`[AGENT] Usuario encontrado:`, user ? `RUT: ${user.rut}, Nombre: ${user.nombre}` : 'NO ENCONTRADO');
 
     if (!user) {
       return c.json({
@@ -203,9 +254,28 @@ router.post('/message', async (c) => {
       'INSERT INTO messages (rut, sender, content) VALUES (?, ?, ?)'
     ).bind(rut, 'agent', answer).run();
 
-    return c.json({ respuesta: answer });
+    console.log(`[AGENT] Respuesta generada (texto): "${answer.substring(0, 200)}..."`);
+    console.log(`[AGENT] Source: ${source}`);
+
+    // Formatear respuesta según origen
+    const respuestaFormateada = await formatearRespuestaSegunOrigen(
+      answer,
+      telefono,
+      source,
+      c.env
+    );
+
+    console.log(`[AGENT] Respuesta formateada - Tipo: ${respuestaFormateada.tipo || 'texto'}`);
+    if (respuestaFormateada.tipo === 'audio') {
+      console.log(`[AGENT] Audio generado - MimeType: ${respuestaFormateada.mimeType}, Tamaño: ${respuestaFormateada.contenido.length} bytes`);
+    }
+
+    return c.json(respuestaFormateada);
   } catch (error) {
-    console.error('Error processing agent message:', error);
+    console.error('[AGENT] ===== ERROR =====');
+    console.error('[AGENT] Error processing agent message:', error);
+    console.error('[AGENT] Stack:', error.stack);
+    console.error('[AGENT] ==================');
     return c.json({ error: 'Error al procesar mensaje' }, 500);
   }
 });
@@ -674,13 +744,13 @@ async function handleTaxQuestion(env, rut, question, type) {
   }
 
   // Determinar tabla según tipo
-  const table = type === 'ventas' ? 'ventas' : 'compras';
+  const table = type === 'ventas' ? 'ventas_resumen' : 'compras_resumen';
   const label = type === 'ventas' ? 'vendiste' : 'compraste';
 
   if (!periodo) {
     // Si no hay periodo, buscar el último disponible
     const { results } = await env.DB.prepare(`
-      SELECT periodo, SUM(mntTotal) as total
+      SELECT periodo, SUM(rsmnMntTotal) as total
       FROM ${table}
       WHERE rut = ?
       GROUP BY periodo
@@ -697,7 +767,7 @@ async function handleTaxQuestion(env, rut, question, type) {
 
   // Buscar monto para el periodo
   const { results } = await env.DB.prepare(`
-    SELECT SUM(mntTotal) as total
+    SELECT SUM(rsmnMntTotal) as total
     FROM ${table}
     WHERE rut = ? AND periodo = ?
   `).bind(rut, periodo).all();

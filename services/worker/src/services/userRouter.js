@@ -15,13 +15,18 @@
  */
 export async function identifyUser(db, phoneNumber) {
   try {
+    console.log(`[ROUTER] Identificando usuario con teléfono: "${phoneNumber}"`);
+
     // Buscar en tabla contributors
     const user = await db.prepare(
       'SELECT rut, nombre, verified FROM contributors WHERE telefono = ?'
     ).bind(phoneNumber).first();
 
+    console.log(`[ROUTER] Usuario encontrado en DB:`, user ? `RUT: ${user.rut}, Verificado: ${user.verified}` : 'NO ENCONTRADO');
+
     if (user) {
       // Usuario registrado = Cliente
+      console.log(`[ROUTER] Tipo identificado: CLIENTE (verified=${user.verified})`);
       return {
         type: 'cliente',
         data: {
@@ -34,6 +39,7 @@ export async function identifyUser(db, phoneNumber) {
     }
 
     // Usuario no registrado = Prospecto
+    console.log(`[ROUTER] Tipo identificado: PROSPECTO`);
     return {
       type: 'prospecto',
       data: {

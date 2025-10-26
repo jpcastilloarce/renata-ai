@@ -68,14 +68,17 @@ whatsappClient.on('message', async (msg) => {
     // Extract phone number from WhatsApp ID (sin @c.us)
     const phoneNumber = from.split('@')[0]; // "56993788826"
 
+    console.log(`\n[WHATSAPP] === MENSAJE RECIBIDO ===`);
+    console.log(`[WHATSAPP] From (original): ${from}`);
+    console.log(`[WHATSAPP] Teléfono extraído: "${phoneNumber}"`);
+    console.log(`[WHATSAPP] Cuerpo mensaje: "${body}"`);
+
     // PASO 1: Detectar tipo de mensaje (texto o audio)
     const audioInfo = await getAudioFromMessage(msg);
     let mensajeTexto = body;
-    let tipoMensaje = 'texto';
 
     if (audioInfo.hasAudio) {
       console.log(`[AUDIO] Detectado audio de ${phoneNumber}`);
-      tipoMensaje = 'audio';
 
       // Convertir audio a texto usando ElevenLabs
       try {
@@ -106,10 +109,15 @@ whatsappClient.on('message', async (msg) => {
 
     const { type } = await routeResponse.json(); // 'cliente' o 'prospecto'
 
+    console.log(`[WHATSAPP] Tipo de usuario identificado: ${type}`);
+
     // PASO 3: Enviar a la ruta correspondiente
     const endpoint = type === 'cliente'
       ? '/api/agent/message'      // Tu compañero trabaja aquí
       : '/api/prospecto/message';  // TÚ trabajas aquí
+
+    console.log(`[WHATSAPP] Endpoint a llamar: ${endpoint}`);
+    console.log(`[WHATSAPP] Teléfono a enviar: "${phoneNumber}"`);
 
     const response = await fetch(`${WORKER_API_URL}${endpoint}`, {
       method: 'POST',
@@ -118,9 +126,9 @@ whatsappClient.on('message', async (msg) => {
         'Authorization': `Bearer ${AGENT_API_KEY}`
       },
       body: JSON.stringify({
-        telefono: type === 'cliente' ? `+${phoneNumber}` : phoneNumber,
+        telefono: phoneNumber,
         mensaje: mensajeTexto,
-        tipoMensajeOriginal: tipoMensaje // Informar si el mensaje original era audio
+        source: 'whatsapp' // Indica que viene de WhatsApp para respuesta en audio
       })
     });
 
@@ -132,10 +140,13 @@ whatsappClient.on('message', async (msg) => {
 
     const data = await response.json();
 
+    console.log(`[WHATSAPP] Respuesta recibida del Worker:`, JSON.stringify(data).substring(0, 200));
+
     // PASO 4: Manejar respuesta (texto o audio)
     if (data.tipo === 'audio' && data.contenido) {
       // Respuesta en formato audio
-      console.log(`[AUDIO] Enviando respuesta de audio a ${from}`);
+      console.log(`[WHATSAPP][AUDIO] Enviando respuesta de audio a ${from}`);
+      console.log(`[WHATSAPP][AUDIO] Tamaño del contenido: ${data.contenido.length} bytes`);
 
       // Convertir ArrayBuffer/Buffer a base64
       const audioBase64 = Buffer.from(data.contenido).toString('base64');
@@ -151,6 +162,7 @@ whatsappClient.on('message', async (msg) => {
     } else {
       // Respuesta en formato texto
       const answer = data.respuesta || data.contenido;
+      console.log(`[WHATSAPP][TEXTO] Enviando respuesta de texto: "${answer}"`);
       await msg.reply(answer);
       console.log(`[${type.toUpperCase()}][TEXTO] Respuesta enviada a ${from}`);
     }

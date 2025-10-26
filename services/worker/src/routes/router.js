@@ -37,11 +37,17 @@ router.post('/identify', async (c) => {
   try {
     const { telefono } = await c.req.json();
 
+    console.log(`[ROUTER ENDPOINT] === INICIO IDENTIFY ===`);
+    console.log(`[ROUTER ENDPOINT] Teléfono recibido: "${telefono}"`);
+
     if (!telefono) {
       return c.json({ error: 'Se requiere teléfono' }, 400);
     }
 
     const type = await routeMessage(c.env.DB, telefono);
+
+    console.log(`[ROUTER ENDPOINT] Tipo determinado: ${type}`);
+    console.log(`[ROUTER ENDPOINT] === FIN IDENTIFY ===`);
 
     return c.json({ type });
 

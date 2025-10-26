@@ -7,7 +7,34 @@
  * 2. Primera llamada OpenAI: Clasifica intencion ('registrar' o 'otro')
  * 3. Segunda llamada OpenAI: Genera respuesta contextual segun clasificacion
  * 4. Guarda mensaje y respuesta en historial D1
- * 5. Retorna respuesta en texto para conversion a audio
+ * 5. Retorna respuesta segun origen:
+ *    - WhatsApp (source='whatsapp'): Convierte texto a audio usando ElevenLabs
+ *    - API/Postman (source='api'): Retorna texto plano
+ *
+ * EJEMPLOS DE USO:
+ *
+ * DESDE POSTMAN/API (respuesta en texto):
+ * POST /api/prospecto/message
+ * {
+ *   "telefono": "+56912345678",
+ *   "mensaje": "Hola, quiero información sobre Renata"
+ * }
+ * // O explícitamente:
+ * {
+ *   "telefono": "+56912345678",
+ *   "mensaje": "Hola, quiero información sobre Renata",
+ *   "source": "api"
+ * }
+ * Respuesta: { "respuesta": "Hola! Renata es una plataforma..." }
+ *
+ * DESDE WHATSAPP (respuesta en audio):
+ * POST /api/prospecto/message
+ * {
+ *   "telefono": "+56912345678",
+ *   "mensaje": "Hola, quiero información sobre Renata",
+ *   "source": "whatsapp"
+ * }
+ * Respuesta: { "tipo": "audio", "contenido": [...], "mimeType": "audio/mpeg" }
  */
 
 import { Hono } from 'hono';
@@ -220,12 +247,62 @@ Basandote en el historial de la conversacion y el mensaje actual, responde de ma
 }
 
 /**
+ * Formatea la respuesta según el origen de la solicitud
+ * @param {string} textoRespuesta - Texto de la respuesta a formatear
+ * @param {string} telefono - Número de teléfono del usuario
+ * @param {string} source - Origen: 'whatsapp' | 'api'
+ * @param {Object} env - Environment variables
+ * @returns {Promise<Object>} - Respuesta formateada según el origen
+ */
+async function formatearRespuestaSegunOrigen(textoRespuesta, telefono, source, env) {
+  // Si viene de WhatsApp, convertir a audio
+  if (source === 'whatsapp') {
+    const respuestaFormateada = await formatResponse({
+      texto: textoRespuesta,
+      telefono,
+      env,
+      userMode: 'audio'
+    });
+
+    // Formatear respuesta para WhatsApp
+    if (respuestaFormateada.tipo === 'audio') {
+      return {
+        tipo: 'audio',
+        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+        mimeType: respuestaFormateada.mimeType
+      };
+    }
+
+    // Fallback a texto si hay error en conversión
+    return {
+      tipo: 'texto',
+      respuesta: textoRespuesta
+    };
+  }
+
+  // Para API/Postman, retornar texto plano (formato anterior)
+  return {
+    respuesta: textoRespuesta
+  };
+}
+
+/**
  * POST /api/prospecto/message
  * Endpoint principal para mensajes de prospectos
+ *
+ * PARAMETROS:
+ * - source: 'whatsapp' | 'api' (opcional, default: 'api')
+ *   - 'whatsapp': Respuesta convertida a audio
+ *   - 'api': Respuesta en texto plano
  */
 router.post('/message', async (c) => {
   try {
-    const { telefono, mensaje, tipoMensajeOriginal } = await c.req.json();
+    const { telefono, mensaje, source = 'api' } = await c.req.json();
+
+    console.log(`[PROSPECTO] === INICIO REQUEST ===`);
+    console.log(`[PROSPECTO] Teléfono: ${telefono}`);
+    console.log(`[PROSPECTO] Mensaje: "${mensaje}"`);
+    console.log(`[PROSPECTO] Source: ${source}`);
 
     if (!telefono || !mensaje) {
       return c.json({ error: 'Se requiere telefono y mensaje' }, 400);
@@ -233,31 +310,32 @@ router.post('/message', async (c) => {
 
     // PASO 1: Obtener historial de conversacion desde D1
     const history = await getConversationHistory(c.env.DB, telefono);
+    console.log(`[PROSPECTO] Historial encontrado: ${history.length} mensajes`);
 
     // PASO 2: Si es el primer mensaje, enviar mensaje de bienvenida
     if (history.length === 0) {
       const mensajeBienvenida = 'Hola, veo que aun no tienes una cuenta creada en nuestro sistema. Tienes un codigo de activacion o necesitas contratar un servicio?';
 
+      console.log(`[PROSPECTO] Primer mensaje - Enviando bienvenida`);
+      console.log(`[PROSPECTO] Respuesta generada (texto): "${mensajeBienvenida}"`);
+
       // Guardar en historial
       await saveToConversationHistory(c.env.DB, telefono, mensaje, mensajeBienvenida);
-      
-      // Formatear respuesta (texto o audio)
-      const respuestaFormateada = await formatResponse({
-        texto: mensajeBienvenida,
-        telefono,
-        env: c.env,
-        userMode: tipoMensajeOriginal === 'audio' ? 'audio' : null
-      });
 
+      // Formatear respuesta según origen
+      const respuestaFormateada = await formatearRespuestaSegunOrigen(
+        mensajeBienvenida,
+        telefono,
+        source,
+        c.env
+      );
+
+      console.log(`[PROSPECTO] Respuesta formateada - Tipo: ${respuestaFormateada.tipo || 'texto'}`);
       if (respuestaFormateada.tipo === 'audio') {
-        return c.json({
-          tipo: 'audio',
-          contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
-          mimeType: respuestaFormateada.mimeType
-        });
-      } else {
-        return c.json({ tipo: 'texto', respuesta: respuestaFormateada.contenido });
+        console.log(`[PROSPECTO] Audio generado - MimeType: ${respuestaFormateada.mimeType}, Tamaño: ${respuestaFormateada.contenido.length} bytes`);
       }
+
+      return c.json(respuestaFormateada);
     }
 
     // PASO 3: Clasificar intencion con OpenAI
@@ -277,28 +355,48 @@ router.post('/message', async (c) => {
     // PASO 5: Guardar en historial D1
     await saveToConversationHistory(c.env.DB, telefono, mensaje, respuestaTexto);
 
-    // PASO 6: Formatear respuesta (texto o audio) usando ResponseFormatter
-    const respuestaFormateada = await formatResponse({
-      texto: respuestaTexto,
-      telefono,
-      env: c.env,
-      userMode: tipoMensajeOriginal === 'audio' ? 'audio' : null
-    });
+    console.log(`[PROSPECTO] Respuesta generada (texto): "${respuestaTexto}"`);
+    console.log(`[PROSPECTO] Source: ${source}`);
 
-    // PASO 7: Retornar en formato unificado
+    // PASO 6: Formatear y retornar respuesta según origen
+    const respuestaFormateada = await formatearRespuestaSegunOrigen(
+      respuestaTexto,
+      telefono,
+      source,
+      c.env
+    );
+
+    console.log(`[PROSPECTO] Respuesta formateada - Tipo: ${respuestaFormateada.tipo || 'texto'}`);
     if (respuestaFormateada.tipo === 'audio') {
-      return c.json({
-        tipo: 'audio',
-        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
-        mimeType: respuestaFormateada.mimeType
-      });
+      console.log(`[PROSPECTO] Audio generado - MimeType: ${respuestaFormateada.mimeType}, Tamaño: ${respuestaFormateada.contenido.length} bytes`);
     } else {
-      return c.json({ tipo: 'texto', respuesta: respuestaFormateada.contenido });
+      console.log(`[PROSPECTO] Respuesta texto: "${respuestaFormateada.respuesta}"`);
     }
+
+    return c.json(respuestaFormateada);
 
   } catch (error) {
     console.error('Error procesando mensaje de prospecto:', error);
-    return c.json({ error: 'Error al procesar mensaje' }, 500);
+
+    // Intentar formatear el error
+    try {
+      const body = await c.req.json();
+      const { telefono, source = 'api' } = body;
+
+      const mensajeError = 'Lo siento, ocurrió un error al procesar tu mensaje. Por favor intenta nuevamente.';
+
+      const respuestaFormateada = await formatearRespuestaSegunOrigen(
+        mensajeError,
+        telefono || 'unknown',
+        source,
+        c.env
+      );
+
+      return c.json(respuestaFormateada, 500);
+    } catch (formatError) {
+      // Si falla el formateo, devolver error simple
+      return c.json({ error: 'Error al procesar mensaje' }, 500);
+    }
   }
 });
 
