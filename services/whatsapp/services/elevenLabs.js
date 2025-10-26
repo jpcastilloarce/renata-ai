@@ -9,8 +9,14 @@
  */
 
 import fs from 'fs';
+import path from 'path';
 import { elevenLabsClient, VOICE_CONFIG } from '../config/elevenlabs.js';
 import { Blob } from 'buffer';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from '@ffmpeg-installer/ffmpeg';
+
+// Configurar ruta de ffmpeg
+ffmpeg.setFfmpegPath(ffmpegPath.path);
 
 /**
  * Convierte un archivo de audio a texto usando ElevenLabs Speech-to-Text
@@ -47,6 +53,8 @@ async function convertirAudioATexto(audioInput, fileName = 'audio.ogg') {
     formData.append('file', audioBlob, fileName);
     formData.append('model_id', 'scribe_v1');
     formData.append('language_code', 'spa');
+    formData.append('tag_audio_events', 'false'); // No etiquetar eventos de audio (silencios, suspiros, emociones)
+    formData.append('diarize', 'false'); // No identificar quién habla
 
     console.log('[Speech-to-Text] Enviando request a ElevenLabs API...');
 
@@ -115,6 +123,97 @@ async function convertirTextoAAudio(texto) {
 }
 
 /**
+ * Convierte un archivo MP3 a OGG (formato requerido por WhatsApp)
+ * @param {Buffer} mp3Buffer - Buffer del archivo MP3
+ * @returns {Promise<Buffer>} - Buffer del archivo OGG generado
+ */
+async function convertirMP3aOGG(mp3Buffer) {
+  return new Promise((resolve, reject) => {
+    const timestamp = Date.now();
+    const tempDir = path.join(process.cwd(), 'temp');
+
+    // Crear directorio temporal si no existe
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const inputPath = path.join(tempDir, `input_${timestamp}.mp3`);
+    const outputPath = path.join(tempDir, `output_${timestamp}.ogg`);
+
+    try {
+      // Guardar MP3 temporal
+      fs.writeFileSync(inputPath, mp3Buffer);
+
+      // Convertir MP3 a OGG con codec Opus
+      ffmpeg(inputPath)
+        .toFormat('ogg')
+        .audioCodec('libopus')
+        .audioBitrate('64k')
+        .audioFrequency(48000)
+        .audioChannels(1) // Mono
+        .on('end', () => {
+          console.log('[MP3→OGG] Conversión completada');
+
+          // Leer archivo OGG
+          const oggBuffer = fs.readFileSync(outputPath);
+
+          // Limpiar archivos temporales
+          try {
+            fs.unlinkSync(inputPath);
+            fs.unlinkSync(outputPath);
+          } catch (e) {
+            console.warn('[MP3→OGG] Error limpiando archivos temporales:', e.message);
+          }
+
+          resolve(oggBuffer);
+        })
+        .on('error', (err) => {
+          console.error('[MP3→OGG] Error en conversión:', err);
+
+          // Limpiar archivos en caso de error
+          try {
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+            if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+          } catch (e) {
+            // Ignorar errores de limpieza
+          }
+
+          reject(err);
+        })
+        .save(outputPath);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Convierte texto a audio en formato OGG (listo para WhatsApp)
+ * @param {string} texto - Texto a convertir
+ * @returns {Promise<Buffer>} - Buffer del audio en formato OGG
+ */
+async function convertirTextoAAudioOGG(texto) {
+  try {
+    console.log('[Text-to-Speech-OGG] Generando audio MP3...');
+
+    // Primero generar MP3 con ElevenLabs
+    const mp3Buffer = await convertirTextoAAudio(texto);
+
+    console.log('[Text-to-Speech-OGG] Convirtiendo MP3 a OGG...');
+
+    // Convertir MP3 a OGG
+    const oggBuffer = await convertirMP3aOGG(mp3Buffer);
+
+    console.log('[Text-to-Speech-OGG] Audio OGG generado, tamaño:', oggBuffer.length, 'bytes');
+
+    return oggBuffer;
+  } catch (error) {
+    console.error('[Text-to-Speech-OGG] Error:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Obtiene informacion del mensaje de audio de WhatsApp
  * @param {Object} msg - Mensaje de WhatsApp
  * @returns {Promise<Object>} { hasAudio: boolean, audioBuffer?: Buffer, mimeType?: string }
@@ -151,5 +250,7 @@ async function getAudioFromMessage(msg) {
 export {
   convertirAudioATexto,
   convertirTextoAAudio,
+  convertirTextoAAudioOGG,
+  convertirMP3aOGG,
   getAudioFromMessage
 };

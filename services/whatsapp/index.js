@@ -3,7 +3,7 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode-terminal';
 import dotenv from 'dotenv';
-import { convertirAudioATexto, convertirTextoAAudio, getAudioFromMessage } from './services/elevenLabs.js';
+import { convertirAudioATexto, convertirTextoAAudioOGG, getAudioFromMessage } from './services/elevenLabs.js';
 
 dotenv.config();
 
@@ -145,26 +145,44 @@ whatsappClient.on('message', async (msg) => {
     // PASO 4: Manejar respuesta (texto o audio)
     if (data.tipo === 'audio' && data.contenido) {
       // Respuesta en formato audio
-      console.log(`[WHATSAPP][AUDIO] Enviando respuesta de audio a ${from}`);
-      console.log(`[WHATSAPP][AUDIO] Tamaño del contenido: ${data.contenido.length} bytes`);
+      console.log(`[WHATSAPP][AUDIO] Procesando respuesta de audio...`);
 
-      // Convertir ArrayBuffer/Buffer a base64
-      const audioBase64 = Buffer.from(data.contenido).toString('base64');
-      const audioMedia = new MessageMedia(
-        data.mimeType || 'audio/mpeg',
-        audioBase64,
-        'respuesta.mp3'
-      );
+      try {
+        // El Worker envía el audio MP3, necesitamos convertirlo a OGG
+        const mp3Buffer = Buffer.from(data.contenido);
+        console.log(`[WHATSAPP][AUDIO] Tamaño del MP3: ${mp3Buffer.length} bytes`);
+        console.log(`[WHATSAPP][AUDIO] Convirtiendo MP3 a OGG para WhatsApp...`);
 
-      await whatsappClient.sendMessage(from, audioMedia);
-      console.log(`[${type.toUpperCase()}][AUDIO] Respuesta enviada a ${from}`);
+        // Importar la función de conversión
+        const { convertirMP3aOGG } = await import('./services/elevenLabs.js');
+        const oggBuffer = await convertirMP3aOGG(mp3Buffer);
+
+        console.log(`[WHATSAPP][AUDIO] OGG generado, tamaño: ${oggBuffer.length} bytes`);
+
+        // Convertir OGG a base64
+        const audioBase64 = oggBuffer.toString('base64');
+        const audioMedia = new MessageMedia(
+          'audio/ogg; codecs=opus',
+          audioBase64,
+          'respuesta.ogg'
+        );
+
+        // Responder al mensaje original (reply) en lugar de sendMessage
+        await msg.reply(audioMedia);
+        console.log(`[${type.toUpperCase()}][AUDIO-OGG] Respuesta de audio enviada como reply a ${from}`);
+      } catch (error) {
+        console.error('[WHATSAPP][AUDIO] Error procesando audio:', error);
+        // Fallback: enviar como texto
+        const textoFallback = data.textoOriginal || 'Hubo un error al generar el audio.';
+        await msg.reply(textoFallback);
+      }
 
     } else {
       // Respuesta en formato texto
       const answer = data.respuesta || data.contenido;
-      console.log(`[WHATSAPP][TEXTO] Enviando respuesta de texto: "${answer}"`);
+      console.log(`[WHATSAPP][TEXTO] Enviando respuesta de texto: "${answer.substring(0, 50)}..."`);
       await msg.reply(answer);
-      console.log(`[${type.toUpperCase()}][TEXTO] Respuesta enviada a ${from}`);
+      console.log(`[${type.toUpperCase()}][TEXTO] Respuesta enviada como reply a ${from}`);
     }
 
   } catch (error) {
@@ -177,24 +195,6 @@ whatsappClient.on('message', async (msg) => {
 console.log('Iniciando cliente de WhatsApp...');
 whatsappClient.initialize();
 
-/**
- * Helper function to get RUT by phone number
- * This could query the Worker API or D1 directly
- */
-async function getRutByPhone(phoneNumber) {
-  try {
-    // Format phone number (add + prefix if needed)
-    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
-
-    // For now, we'll return the phone as-is since we don't have a direct endpoint
-    // In production, you might want to add a /api/agent/get-user endpoint to the Worker
-    // For this demo, we'll assume the phone format in DB matches
-    return formattedPhone;
-  } catch (error) {
-    console.error('Error getting RUT by phone:', error);
-    return null;
-  }
-}
 
 // REST API Endpoints
 

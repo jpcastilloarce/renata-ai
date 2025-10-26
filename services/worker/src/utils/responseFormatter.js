@@ -4,55 +4,76 @@
  *
  * RESPONSABILIDAD:
  * - Punto único de salida para todas las respuestas
- * - Decide si convertir a audio según preferencia del usuario
- * - Garantiza que todas las respuestas pasen por ElevenLabs si es necesario
+ * - Si es para WhatsApp → SIEMPRE convierte a audio (MP3, luego se convierte a OGG en WhatsApp service)
+ * - Si es API directa (Postman) → Retorna texto plano
+ * - SIEMPRE usa la misma voz: Rachel (21m00Tcm4TlvDq8ikWAM)
  *
- * USADO POR: agent.js, prospecto.js, y cualquier handler de mensajes
+ * USADO POR: agent.js, prospecto.js
  */
 
-import { textToAudio, VOCES_ESPANOL, VOICE_PRESETS } from '../services/elevenLabs.js';
+import { textToAudio } from '../services/elevenLabs.js';
+
+// Configuración única de voz para TODAS las respuestas
+const VOICE_CONFIG = {
+  voiceId: '21m00Tcm4TlvDq8ikWAM', // Rachel - voz femenina en español
+  modelId: 'eleven_multilingual_v2', // Modelo multilingüe v2 (mejor para español)
+  voiceSettings: {
+    stability: 0.5,           // 0-1: Mayor = más consistente, Menor = más variado
+    similarity_boost: 0.75,   // 0-1: Qué tan similar al original
+    style: 0.2,               // 0-1: Exageración del estilo (solo algunas voces)
+    use_speaker_boost: true   // Mejora la calidad para voces clonadas
+  }
+};
 
 /**
- * Formatea una respuesta según las preferencias del usuario
+ * Formatea una respuesta según el origen (WhatsApp o API)
  * @param {Object} params - Parámetros de formateo
  * @param {string} params.texto - Texto de la respuesta
- * @param {string} params.telefono - Número de teléfono del usuario
  * @param {Object} params.env - Environment variables (Cloudflare)
- * @param {string} params.userMode - Modo del usuario: 'audio' | 'texto' (opcional, default: detectar)
- * @returns {Promise<Object>} { tipo: 'texto'|'audio', contenido: string|ArrayBuffer }
+ * @param {boolean} params.esWhatsApp - true si es para WhatsApp, false si es API directa
+ * @returns {Promise<Object>} { tipo: 'texto'|'audio', contenido: string|ArrayBuffer, mimeType?: string, textoOriginal?: string }
  */
-export async function formatResponse({ texto, telefono, env, userMode = null }) {
+export async function formatResponse({ texto, env, esWhatsApp = true }) {
   try {
-    // Determinar modo del usuario
-    const modo = userMode || await detectarModoUsuario(telefono, env);
+    // Si es para WhatsApp → SIEMPRE convertir a audio
+    if (esWhatsApp) {
+      console.log('[ResponseFormatter] Convirtiendo texto a audio para WhatsApp...');
 
-    if (modo === 'audio') {
-      // Convertir texto a audio usando ElevenLabs
-      // Usa ELEVENLABS_VOICE_ID del env o voz por defecto
-      const voiceId = env.ELEVENLABS_VOICE_ID || VOCES_ESPANOL.FEMENINA;
+      // Usar ELEVENLABS_VOICE_ID del env o voz por defecto Rachel
+      const voiceId = env.ELEVENLABS_VOICE_ID || VOICE_CONFIG.voiceId;
 
+      // Convertir texto a audio usando ElevenLabs (retorna MP3)
       const audioBuffer = await textToAudio(
         env.ELEVENLABS_API_KEY,
         texto,
         voiceId,
-        { voice_settings: VOICE_PRESETS.AMIGABLE }
+        {
+          model_id: VOICE_CONFIG.modelId,
+          voice_settings: VOICE_CONFIG.voiceSettings
+        }
       );
 
+      console.log('[ResponseFormatter] Audio MP3 generado, tamaño:', audioBuffer.byteLength, 'bytes');
+      console.log('[ResponseFormatter] Se convertirá a OGG en WhatsApp service');
+
+      // IMPORTANTE: El Worker retorna MP3, el servicio WhatsApp lo convertirá a OGG
       return {
         tipo: 'audio',
         contenido: audioBuffer,
-        mimeType: 'audio/mpeg'
+        mimeType: 'audio/mpeg', // MP3 (se convertirá a OGG en WhatsApp service)
+        textoOriginal: texto // Para fallback si falla conversión a OGG
       };
     }
 
-    // Modo texto (default)
+    // Si es API directa (Postman) → Retornar texto plano
+    console.log('[ResponseFormatter] Retornando texto plano para API directa');
     return {
       tipo: 'texto',
       contenido: texto
     };
 
   } catch (error) {
-    console.error('Error formateando respuesta:', error);
+    console.error('[ResponseFormatter] Error formateando respuesta:', error);
 
     // Fallback: siempre retornar texto si hay error
     return {
@@ -60,64 +81,6 @@ export async function formatResponse({ texto, telefono, env, userMode = null }) 
       contenido: texto,
       error: error.message
     };
-  }
-}
-
-/**
- * Detecta el modo de comunicación preferido del usuario
- * @param {string} telefono - Número de teléfono
- * @param {Object} env - Environment variables
- * @returns {Promise<string>} 'audio' o 'texto'
- */
-async function detectarModoUsuario(telefono, env) {
-  try {
-    // Buscar en KV Store si el usuario tiene preferencia guardada
-    const preference = await env.SESSIONS_KV.get(`modo:${telefono}`);
-
-    if (preference) {
-      return preference; // 'audio' o 'texto'
-    }
-
-    // Default: texto
-    return 'texto';
-
-  } catch (error) {
-    console.error('Error detectando modo usuario:', error);
-    return 'texto'; // Fallback
-  }
-}
-
-/**
- * Guarda la preferencia de modo del usuario
- * @param {string} telefono - Número de teléfono
- * @param {string} modo - 'audio' o 'texto'
- * @param {Object} env - Environment variables
- */
-export async function setModoUsuario(telefono, modo, env) {
-  try {
-    await env.SESSIONS_KV.put(`modo:${telefono}`, modo, {
-      expirationTtl: 86400 * 30 // 30 días
-    });
-  } catch (error) {
-    console.error('Error guardando modo usuario:', error);
-  }
-}
-
-/**
- * Detecta automáticamente el modo basado en el tipo de mensaje recibido
- * Si el usuario envía audio, se cambia su preferencia a audio
- * @param {string} telefono - Número de teléfono
- * @param {string} tipoMensaje - 'texto' o 'audio'
- * @param {Object} env - Environment variables
- */
-export async function actualizarModoSegunInput(telefono, tipoMensaje, env) {
-  try {
-    if (tipoMensaje === 'audio') {
-      await setModoUsuario(telefono, 'audio', env);
-    }
-    // No cambiamos a texto automáticamente, solo si el usuario lo pide explícitamente
-  } catch (error) {
-    console.error('Error actualizando modo:', error);
   }
 }
 
@@ -132,7 +95,7 @@ export function formatError(mensaje) {
 
 /**
  * Helper para crear respuesta de texto simple (sin audio)
- * Útil para testing o forzar modo texto
+ * Útil para testing o respuestas de API
  */
 export function createTextResponse(texto) {
   return {
@@ -145,6 +108,6 @@ export function createTextResponse(texto) {
  * Constantes de configuración
  */
 export const MODOS = {
-  AUDIO: 'audio',
-  TEXTO: 'texto'
+  WHATSAPP: 'whatsapp',
+  API: 'api'
 };

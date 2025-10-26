@@ -254,34 +254,29 @@ Basandote en el historial de la conversacion y el mensaje actual, responde de ma
  * @param {Object} env - Environment variables
  * @returns {Promise<Object>} - Respuesta formateada según el origen
  */
-async function formatearRespuestaSegunOrigen(textoRespuesta, telefono, source, env) {
-  // Si viene de WhatsApp, convertir a audio
-  if (source === 'whatsapp') {
-    const respuestaFormateada = await formatResponse({
-      texto: textoRespuesta,
-      telefono,
-      env,
-      userMode: 'audio'
-    });
+async function formatearRespuestaSegunOrigen(textoRespuesta, source, env) {
+  // Si viene de WhatsApp → SIEMPRE convertir a audio
+  const esWhatsApp = (source === 'whatsapp');
 
-    // Formatear respuesta para WhatsApp
-    if (respuestaFormateada.tipo === 'audio') {
-      return {
-        tipo: 'audio',
-        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
-        mimeType: respuestaFormateada.mimeType
-      };
-    }
+  const respuestaFormateada = await formatResponse({
+    texto: textoRespuesta,
+    env,
+    esWhatsApp
+  });
 
-    // Fallback a texto si hay error en conversión
+  // Formatear respuesta según el tipo
+  if (respuestaFormateada.tipo === 'audio') {
     return {
-      tipo: 'texto',
-      respuesta: textoRespuesta
+      tipo: 'audio',
+      contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+      mimeType: respuestaFormateada.mimeType,
+      textoOriginal: respuestaFormateada.textoOriginal
     };
   }
 
-  // Para API/Postman, retornar texto plano (formato anterior)
+  // Texto plano (para API/Postman)
   return {
+    tipo: 'texto',
     respuesta: textoRespuesta
   };
 }
@@ -322,10 +317,9 @@ router.post('/message', async (c) => {
       // Guardar en historial
       await saveToConversationHistory(c.env.DB, telefono, mensaje, mensajeBienvenida);
 
-      // Formatear respuesta según origen
+      // Formatear respuesta según origen (SIEMPRE audio si es WhatsApp)
       const respuestaFormateada = await formatearRespuestaSegunOrigen(
         mensajeBienvenida,
-        telefono,
         source,
         c.env
       );
@@ -358,10 +352,9 @@ router.post('/message', async (c) => {
     console.log(`[PROSPECTO] Respuesta generada (texto): "${respuestaTexto}"`);
     console.log(`[PROSPECTO] Source: ${source}`);
 
-    // PASO 6: Formatear y retornar respuesta según origen
+    // PASO 6: Formatear y retornar respuesta según origen (SIEMPRE audio si es WhatsApp)
     const respuestaFormateada = await formatearRespuestaSegunOrigen(
       respuestaTexto,
-      telefono,
       source,
       c.env
     );
@@ -381,13 +374,12 @@ router.post('/message', async (c) => {
     // Intentar formatear el error
     try {
       const body = await c.req.json();
-      const { telefono, source = 'api' } = body;
+      const { source = 'api' } = body;
 
       const mensajeError = 'Lo siento, ocurrió un error al procesar tu mensaje. Por favor intenta nuevamente.';
 
       const respuestaFormateada = await formatearRespuestaSegunOrigen(
         mensajeError,
-        telefono || 'unknown',
         source,
         c.env
       );

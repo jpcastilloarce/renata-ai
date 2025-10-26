@@ -10,74 +10,82 @@ const AGENT_SYSTEM_PROMPT = `Eres Renata, un asistente virtual experto en temas 
 
 Tu rol es ayudar a contribuyentes chilenos con:
 - Consultas sobre sus ventas y compras registradas en el SII
-- Información sobre normativas laborales de la dirección del trabajo y obligaciones tributarias
+- Información sobre normativas laborales de la dirección del trabajo y normativas tributarias chilenas del SII
 - Fechas de vencimiento de declaraciones (Formulario 29, F22, etc.)
-- Interpretación de documentos tributarios electrónicos (DTE)
-- Normativa tributaria chilena vigente
+- Cuando Pregunten por detalle de Factura se refiere al detalle de Compra, donde está el proveedor
 
 Características de tu personalidad:
 - Profesional pero cercana y amigable
-- Proactiva en ofrecer información relevante
-- Explicas conceptos tributarios de forma clara y simple
-- Usas ejemplos concretos cuando es necesario
-- Siempre saludas al usuario por su nombre cuando está disponible
+- Siempre saludas al usuario por su nombre
 - Respondes en español de Chile
-- Cuando Pregunten por detalle de Factura se refiere al detalle de Compra, donde está el proveedor
+- Evitas tecnicismos complejos, explicas de forma sencilla
+- Si no sabes la respuesta, lo admites honestamente y sugieres contactar al SII o a un asesor tributario
 
-Limitaciones:
-- NO puedes realizar trámites directamente en el SII
-- NO das asesoría legal específica (recomiendas consultar con un contador)
-- NO tienes acceso a información que no esté en tu base de datos
-- NO respondas con iconos o emojis en las respuestas
-- Usa máximo 3 linésas por respuesta ya que es una respuesta para WhatsApp
-- Los números respóndelos en formato texto (ej: doscientos mil)
-
+Instrucciones críticas para todas las respuestas:
 Cuando respondas:
 1. Sé concisa pero completa
 2. Si no tienes información suficiente, dilo claramente
 3. Ofrece información adicional relacionada cuando sea útil
-4. Si el usuario pregunta algo fuera de tu expertise, sugiere dónde puede encontrar ayuda`;
+4. Si el usuario pregunta algo fuera de tu expertise, sugiere dónde puede encontrar ayuda
+Tu trabajo es tomar datos crudos de consultas a bases de datos y convertirlos en respuestas naturales, claras y conversacionales.
+
+REGLAS CRÍTICAS PARA AUDIO:
+- TODOS los números DEBEN ser escritos en palabras (texto), NUNCA en dígitos
+- Ejemplos CORRECTOS:
+  * "dos millones trescientos setenta y cuatro mil cincuenta pesos"
+  * "agosto de dos mil veinticinco"
+  * "trescientos cincuenta mil pesos"
+- Ejemplos INCORRECTOS:
+  * "2.374.050 pesos" ❌
+  * "agosto de 2025" ❌
+  * "$350.000" ❌
+
+FORMATO DE RESPUESTA:
+- Responde de forma concisa (máximo 3 líneas)
+- Usa un tono amigable pero profesional
+- Menciona "pesos" para montos en Chile
+- Responde directamente sin preámbulos innecesarios
+- Si la respuesta es null o vacía, indica que no se encontraron datos para ese período
+-nunca uses iconos o emojis en la respuesta
+
+IMPORTANTE: Esta respuesta será convertida a audio, por eso TODOS los números deben estar en palabras.`;
 
 
 /**
  * Formatea la respuesta según el origen de la solicitud
  * @param {string} textoRespuesta - Texto de la respuesta a formatear
- * @param {string} telefono - Número de teléfono del usuario
  * @param {string} source - Origen: 'whatsapp' | 'api'
  * @param {Object} env - Environment variables
  * @returns {Promise<Object>} - Respuesta formateada según el origen
  */
-async function formatearRespuestaSegunOrigen(textoRespuesta, telefono, source, env) {
-  // Si viene de WhatsApp, convertir a audio
-  if (source === 'whatsapp') {
-    const respuestaFormateada = await formatResponse({
-      texto: textoRespuesta,
-      telefono,
-      env,
-      userMode: 'audio'
-    });
+async function formatearRespuestaSegunOrigen(textoRespuesta, source, env) {
+  // Si viene de WhatsApp → SIEMPRE convertir a audio
+  const esWhatsApp = (source === 'whatsapp');
 
-    // Formatear respuesta para WhatsApp
-    if (respuestaFormateada.tipo === 'audio') {
-      return {
-        tipo: 'audio',
-        contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
-        mimeType: respuestaFormateada.mimeType
-      };
-    }
+  const respuestaFormateada = await formatResponse({
+    texto: textoRespuesta,
+    env,
+    esWhatsApp
+  });
 
-    // Fallback a texto si hay error en conversión
+  // Formatear respuesta según el tipo
+  if (respuestaFormateada.tipo === 'audio') {
     return {
-      tipo: 'texto',
-      respuesta: textoRespuesta
+      tipo: 'audio',
+      contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+      mimeType: respuestaFormateada.mimeType,
+      textoOriginal: respuestaFormateada.textoOriginal
     };
   }
 
-  // Para API/Postman, retornar texto plano (formato anterior)
+  // Texto plano (para API/Postman)
   return {
+    tipo: 'texto',
     respuesta: textoRespuesta
   };
 }
+    
+
 
 /**
  * Agent middleware - validate API key
@@ -260,7 +268,6 @@ router.post('/message', async (c) => {
     // Formatear respuesta según origen
     const respuestaFormateada = await formatearRespuestaSegunOrigen(
       answer,
-      telefono,
       source,
       c.env
     );
@@ -293,7 +300,7 @@ async function postProcessCombinedAnswer({ respuestas, mensaje, rut, nombre, fec
     let monto = parseInt(montoStr, 10);
     if (!isNaN(monto) && monto > 0) {
       iva = Math.round(monto * 0.19);
-      combined += `\n\n💡 Estimación de IVA: Por tus ventas, deberías declarar un IVA aproximado de CLP ${iva.toLocaleString('es-CL')}.`;
+      combined += `\n\n💡 Estimación de IVA: Por tus ventas, deberías declarar un IVA aproximado de ${iva.toLocaleString('es-CL')}.`;
       // Agregar recordatorio de pago si estamos cerca de fin de mes
       const dia = fechaActual.getDate();
       if (dia >= 20 && dia <= 31) {
@@ -465,15 +472,15 @@ function formatIVAResponse(data, monthName, year) {
   const tipo = data.saldo > 0 ? 'a pagar' : 'a favor';
   const saldoAbs = Math.abs(data.saldo);
 
-  return `📊 Resumen de IVA para ${monthName} ${year}:
+  return `Resumen de IVA para ${monthName} ${year}:
 
-💰 IVA Débito (ventas): CLP ${data.ivaDebito.toLocaleString('es-CL')}
-💳 IVA Crédito (compras): CLP ${data.ivaCredito.toLocaleString('es-CL')}
+IVA Débito (ventas): ${data.ivaDebito.toLocaleString('es-CL')}
+IVA Crédito (compras): ${data.ivaCredito.toLocaleString('es-CL')}
 ━━━━━━━━━━━━━━━━━
-${data.saldo >= 0 ? '🔴' : '🟢'} Saldo ${tipo}: CLP ${saldoAbs.toLocaleString('es-CL')}
+${data.saldo >= 0 ? '' : ''} Saldo ${tipo}:${saldoAbs.toLocaleString('es-CL')}
 
-📈 Total ventas: CLP ${data.totalVentas.toLocaleString('es-CL')}
-📉 Total compras: CLP ${data.totalCompras.toLocaleString('es-CL')}`;
+Total ventas: ${data.totalVentas.toLocaleString('es-CL')}
+Total compras: ${data.totalCompras.toLocaleString('es-CL')}`;
 }
 
 // Handler para preguntas de rentabilidad
@@ -540,18 +547,18 @@ async function calculateRentabilidad(env, rut, periodo) {
 }
 
 function formatRentabilidadResponse(data, monthName, year) {
-  const estado = data.utilidad >= 0 ? '✅ Ganancia' : '❌ Pérdida';
+  const estado = data.utilidad >= 0 ? 'Ganancia' : 'Pérdida';
   const utilidadNeta = data.utilidad - data.ivaAPagar;
 
-  return `💼 Análisis de Rentabilidad - ${monthName} ${year}:
+  return `Análisis de Rentabilidad - ${monthName} ${year}:
 
-📈 Ingresos (neto): CLP ${data.ingresos.toLocaleString('es-CL')}
-📉 Gastos (neto): CLP ${data.gastos.toLocaleString('es-CL')}
+Ingresos (neto): ${data.ingresos.toLocaleString('es-CL')}
+Gastos (neto): ${data.gastos.toLocaleString('es-CL')}
 ━━━━━━━━━━━━━━━━━
-${estado}: CLP ${Math.abs(data.utilidad).toLocaleString('es-CL')}
-📊 Margen: ${data.margen.toFixed(1)}%
+${estado}: ${Math.abs(data.utilidad).toLocaleString('es-CL')}
+Margen: ${data.margen.toFixed(1)}%
 
-💰 Después de IVA (~19%): CLP ${utilidadNeta.toLocaleString('es-CL')}`;
+Después de IVA (~19%): ${utilidadNeta.toLocaleString('es-CL')}`;
 }
 
 // Handler para principales clientes
@@ -591,7 +598,7 @@ async function handleClientesQuestion(env, rut, question) {
 
   results.forEach((cliente, idx) => {
     respuesta += `${idx + 1}. ${cliente.detRznSoc}\n`;
-    respuesta += `   💰 Total: CLP ${Number(cliente.total).toLocaleString('es-CL')} (${cliente.cantidad} documentos)\n\n`;
+    respuesta += `Total: ${Number(cliente.total).toLocaleString('es-CL')} (${cliente.cantidad} documentos)\n\n`;
   });
 
   return respuesta.trim();
@@ -630,11 +637,11 @@ async function handleProveedoresQuestion(env, rut, question) {
   }
 
   const monthName = monthNum ? Object.keys(months).find(key => months[key] === monthNum) : 'todo el período';
-  let respuesta = `🏪 Tus principales proveedores en ${monthName} ${year}:\n\n`;
+  let respuesta = `Tus principales proveedores en ${monthName} ${year}:\n\n`;
 
   results.forEach((proveedor, idx) => {
     respuesta += `${idx + 1}. ${proveedor.detRznSoc}\n`;
-    respuesta += `   💰 Total: CLP ${Number(proveedor.total).toLocaleString('es-CL')} (${proveedor.cantidad} documentos)\n\n`;
+    respuesta += `   💰 Total: ${Number(proveedor.total).toLocaleString('es-CL')} (${proveedor.cantidad} documentos)\n\n`;
   });
 
   return respuesta.trim();
@@ -669,14 +676,14 @@ async function handleReservaQuestion(env, rut, question) {
   const impuestoRenta = rentabilidad.utilidad > 0 ? rentabilidad.utilidad * 0.25 : 0; // ~25% aprox
   const reservaTotal = ivaAPagar + impuestoRenta;
 
-  return `💰 Reserva Recomendada de Impuestos (basado en ${monthName} ${y}):
+  return `Reserva Recomendada de Impuestos (basado en ${monthName} ${y}):
 
-🔴 IVA a pagar: CLP ${ivaAPagar.toLocaleString('es-CL')}
-🔴 Impuesto a la renta estimado (~25%): CLP ${impuestoRenta.toLocaleString('es-CL')}
+IVA a pagar: ${ivaAPagar.toLocaleString('es-CL')}
+Impuesto a la renta estimado (~25%): ${impuestoRenta.toLocaleString('es-CL')}
 ━━━━━━━━━━━━━━━━━
-💵 Total recomendado a reservar: CLP ${reservaTotal.toLocaleString('es-CL')}
+Total recomendado a reservar:  ${reservaTotal.toLocaleString('es-CL')}
 
-💡 Tip: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.`;
+Tip: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.`;
 }
 
 async function handleContractQuestion(env, rut, question) {
@@ -760,7 +767,7 @@ async function handleTaxQuestion(env, rut, question, type) {
     if (results.length > 0) {
       const [year, month] = results[0].periodo.split('-');
       const monthName = Object.keys(months).find(key => months[key] === month);
-      return `Tu último registro de ${type} fue en ${monthName} ${year} con un total de CLP ${Number(results[0].total).toLocaleString('es-CL')}.`;
+      return `Tu último registro de ${type} fue en ${monthName} ${year} con un total de ${Number(results[0].total).toLocaleString('es-CL')}.`;
     }
     return `No encontré registros de ${type} en tu historial.`;
   }
@@ -774,7 +781,7 @@ async function handleTaxQuestion(env, rut, question, type) {
 
   if (results.length > 0 && results[0].total) {
     const monthName = Object.keys(months).find(key => months[key] === monthNum);
-    return `En ${monthName} ${year} ${label} un total de CLP ${Number(results[0].total).toLocaleString('es-CL')}.`;
+    return `En ${monthName} ${year} ${label} un total de ${Number(results[0].total).toLocaleString('es-CL')}.`;
   }
   return `No encontré registros de ${type} para ${Object.keys(months).find(key => months[key] === monthNum)} ${year}.`;
 }
@@ -806,12 +813,12 @@ async function handleDetailQuestion(env, rut, question, type) {
     table = 'ventas_detalle';
     label = 'ventas';
     selectFields = 'detTipoDoc, detNroDoc, detRznSoc, detMntTotal';
-    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: CLP ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
+    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}:  ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
   } else {
     table = 'compras_detalle';
     label = 'compras';
     selectFields = 'detTipoDoc, detNroDoc, detRznSoc, detMntTotal';
-    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: CLP ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
+    formatRow = r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: ${Number(r.detMntTotal).toLocaleString('es-CL')}`;
   }
   if (!periodo) {
     // Si no hay periodo, buscar el último disponible
@@ -857,7 +864,7 @@ async function handleDetailQuestion(env, rut, question, type) {
         }
       }
       if (mayorProveedor) {
-        return `Tu mayor proveedor en ${monthName} ${year} fue "${mayorProveedor}" con un total de CLP ${mayorMonto.toLocaleString('es-CL')}.`;
+        return `Tu mayor proveedor en ${monthName} ${year} fue "${mayorProveedor}" con un total de ${mayorMonto.toLocaleString('es-CL')}.`;
       } else {
         return `No encontré información suficiente para determinar el mayor proveedor en ${monthName} ${year}.`;
       }
