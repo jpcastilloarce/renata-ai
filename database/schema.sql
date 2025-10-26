@@ -250,3 +250,13 @@ CREATE TABLE embeddings (
     content TEXT NOT NULL              -- contenido de texto del fragmento
     -- (el vector no se almacena aquí, está en Vectorize; podríamos almacenar metadata adicional si se requiere)
 );
+
+-- Tabla de historial de conversaciones con prospectos
+CREATE TABLE conversation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telefono TEXT NOT NULL,            -- Número de teléfono del prospecto
+    mensaje_cliente TEXT NOT NULL,     -- Mensaje enviado por el cliente
+    respuesta_agente TEXT NOT NULL,    -- Respuesta generada por el agente
+    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,  -- Fecha y hora del intercambio
+    INDEX idx_telefono_timestamp (telefono, timestamp)  -- Índice para búsquedas rápidas por teléfono
+);

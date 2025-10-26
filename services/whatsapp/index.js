@@ -3,7 +3,9 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode-terminal';
 import dotenv from 'dotenv';
-import { audioToText, getAudioFromMessage } from './services/elevenLabs.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { convertirAudioATexto, convertirTextoAAudio, getAudioFromMessage } = require('./services/elevenLabs.js');
 
 dotenv.config();
 
@@ -79,7 +81,7 @@ whatsappClient.on('message', async (msg) => {
 
       // Convertir audio a texto usando ElevenLabs
       try {
-        mensajeTexto = await audioToText(audioInfo.audioBuffer, ELEVENLABS_API_KEY);
+        mensajeTexto = await convertirAudioATexto(audioInfo.audioBuffer, 'audio.ogg');
         console.log(`[AUDIO→TEXTO] Transcripción: ${mensajeTexto.substring(0, 100)}...`);
       } catch (error) {
         console.error('Error convirtiendo audio a texto:', error);

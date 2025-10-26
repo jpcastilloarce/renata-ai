@@ -1,27 +1,23 @@
 /**
  * prospecto.js
- * Maneja todas las interacciones con prospectos (usuarios no registrados)
+ * Maneja conversaciones con prospectos (usuarios no registrados)
  *
- * RESPONSABILIDAD:
- * - Mensajes de bienvenida
- * - Validación de código de activación "SKY"
- * - Proceso de registro guiado
- * - Consultas sobre servicios
- *
- * ESTE ARCHIVO ES TU ZONA DE TRABAJO - NO AFECTA agent.js
+ * FLUJO:
+ * 1. Obtiene historial de conversacion desde D1 (ultimas 24 horas)
+ * 2. Primera llamada OpenAI: Clasifica intencion ('registrar' o 'otro')
+ * 3. Segunda llamada OpenAI: Genera respuesta contextual segun clasificacion
+ * 4. Guarda mensaje y respuesta en historial D1
+ * 5. Retorna respuesta en texto para conversion a audio
  */
 
 import { Hono } from 'hono';
-import { logEvent } from '../utils/logger.js';
-import { formatResponse, actualizarModoSegunInput } from '../utils/responseFormatter.js';
+import { callOpenAI } from '../utils/openai.js';
+import { formatResponse } from '../utils/responseFormatter.js';
 
 const router = new Hono();
 
-// Código de activación válido
-const CODIGO_ACTIVACION = 'SKY';
-
 /**
- * Middleware de autenticación (igual que agent.js)
+ * Middleware de autenticacion
  */
 router.use('/*', async (c, next) => {
   const authHeader = c.req.header('Authorization');
@@ -33,11 +29,195 @@ router.use('/*', async (c, next) => {
   const apiKey = authHeader.substring(7);
 
   if (apiKey !== c.env.AGENT_API_KEY) {
-    return c.json({ error: 'API key inválida' }, 401);
+    return c.json({ error: 'API key invalida' }, 401);
   }
 
   await next();
 });
+
+/**
+ * Obtiene el historial de conversacion desde D1
+ * @param {Object} db - D1 Database instance
+ * @param {string} telefono - Numero de telefono del usuario
+ * @returns {Promise<Array>} - Array de objetos {role: 'user'|'assistant', content: string}
+ */
+async function getConversationHistory(db, telefono) {
+  try {
+    // Obtener ultimas conversaciones (ultimas 24 horas, maximo 20 mensajes)
+    const { results } = await db.prepare(`
+      SELECT mensaje_cliente, respuesta_agente, timestamp
+      FROM conversation_history
+      WHERE telefono = ?
+        AND timestamp > datetime('now', '-24 hours')
+      ORDER BY timestamp ASC
+      LIMIT 10
+    `).bind(telefono).all();
+
+    if (!results || results.length === 0) {
+      return [];
+    }
+
+    // Convertir a formato OpenAI (alternando user/assistant)
+    const history = [];
+    for (const row of results) {
+      history.push(
+        { role: 'user', content: row.mensaje_cliente },
+        { role: 'assistant', content: row.respuesta_agente }
+      );
+    }
+
+    return history;
+  } catch (error) {
+    console.error('Error obteniendo historial:', error);
+    return [];
+  }
+}
+
+/**
+ * Guarda un intercambio (mensaje + respuesta) en el historial D1
+ * @param {Object} db - D1 Database instance
+ * @param {string} telefono - Numero de telefono
+ * @param {string} userMessage - Mensaje del usuario
+ * @param {string} assistantResponse - Respuesta del asistente
+ */
+async function saveToConversationHistory(db, telefono, userMessage, assistantResponse) {
+  try {
+    await db.prepare(`
+      INSERT INTO conversation_history (telefono, mensaje_cliente, respuesta_agente)
+      VALUES (?, ?, ?)
+    `).bind(telefono, userMessage, assistantResponse).run();
+
+    console.log(`Historial guardado para ${telefono}`);
+  } catch (error) {
+    console.error('Error guardando historial:', error);
+  }
+}
+
+/**
+ * Clasifica la intencion del mensaje usando OpenAI
+ * @param {string} apiKey - OpenAI API Key
+ * @param {string} mensaje - Mensaje del usuario
+ * @param {Array} history - Historial de conversacion
+ * @returns {Promise<string>} - 'registrar' o 'otro'
+ */
+async function clasificarIntencion(apiKey, mensaje, history) {
+  const systemPrompt = `Analiza el mensaje del prospecto y segun el contexto del mensaje debes responder SOLAMENTE con 2 opciones:
+1) Si el contexto del mensaje esta relacionado en registrar su empresa o quiere saber como registrar su empresa debe responder 'registrar'
+2) Cualquier otro tipo de contexto debe responder 'otro'
+
+IMPORTANTE: Responde UNICAMENTE con la palabra 'registrar' o 'otro', sin puntos, sin explicaciones adicionales.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: mensaje }
+  ];
+
+  try {
+    const response = await callOpenAI(apiKey, messages);
+    const clasificacion = response.trim().toLowerCase();
+
+    // Validar respuesta
+    if (clasificacion.includes('registrar')) {
+      return 'registrar';
+    }
+    return 'otro';
+  } catch (error) {
+    console.error('Error clasificando intencion:', error);
+    return 'otro'; // Default
+  }
+}
+
+/**
+ * Genera respuesta para flujo de registro
+ * @param {string} apiKey - OpenAI API Key
+ * @param {string} mensaje - Mensaje del usuario
+ * @param {Array} history - Historial de conversacion
+ * @returns {Promise<string>} - Respuesta generada
+ */
+async function generarRespuestaRegistro(apiKey, mensaje, history) {
+  const systemPrompt = `Eres un asistente de Renata, una plataforma de gestion tributaria para empresas chilenas.
+
+Tu rol es ayudar a prospectos que quieren registrar su empresa en la plataforma.
+
+INFORMACION CLAVE:
+- Para registrarse necesitan: RUT de la empresa, nombre, telefono, y clave del SII
+- El registro se hace a traves de nuestra pagina web: https://renata.cl/registro
+- El proceso toma aproximadamente 5 minutos
+- Una vez registrados, tendran acceso a: consultas de ventas y compras, informes tributarios, y asistencia con el SII
+
+ESTILO DE COMUNICACION:
+- Profesional pero cercana
+- Sin emoticons
+- Respuestas concisas (maximo 3-4 oraciones)
+- En español de Chile
+- Enfocate en guiar al prospecto hacia el registro
+
+Basandote en el historial de la conversacion y el mensaje actual, proporciona una respuesta util y orientada a facilitar el registro.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: mensaje }
+  ];
+
+  try {
+    const response = await callOpenAI(apiKey, messages);
+    return response.trim();
+  } catch (error) {
+    console.error('Error generando respuesta de registro:', error);
+    return 'Disculpa, estoy teniendo problemas tecnicos. Para registrarte, visita https://renata.cl/registro o escribenos a soporte@renata.cl';
+  }
+}
+
+/**
+ * Genera respuesta para otros temas (informacion general)
+ * @param {string} apiKey - OpenAI API Key
+ * @param {string} mensaje - Mensaje del usuario
+ * @param {Array} history - Historial de conversacion
+ * @returns {Promise<string>} - Respuesta generada
+ */
+async function generarRespuestaOtro(apiKey, mensaje, history) {
+  const systemPrompt = `Eres un asistente de Renata, una plataforma de gestion tributaria para empresas chilenas.
+
+Tu rol es proporcionar informacion sobre los servicios de Renata a prospectos.
+
+SERVICIOS QUE OFRECE RENATA:
+- Consulta automatica de ventas y compras desde el SII
+- Informes tributarios mensuales
+- Alertas de vencimientos (F29, F22, etc.)
+- Asistente AI experto en normativa tributaria chilena
+- Gestion de documentos tributarios electronicos (DTE)
+
+BENEFICIOS:
+- Ahorro de tiempo en gestion tributaria
+- Informacion actualizada 24/7
+- Soporte especializado
+- Integracion directa con el SII
+
+ESTILO DE COMUNICACION:
+- Profesional pero amigable
+- Sin emoticons
+- Respuestas concisas (maximo 3-4 oraciones)
+- En español de Chile
+- Si preguntan por precios o planes, indicar que contacten a ventas@renata.cl
+
+Basandote en el historial de la conversacion y el mensaje actual, responde de manera util sobre nuestros servicios.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: mensaje }
+  ];
+
+  try {
+    const response = await callOpenAI(apiKey, messages);
+    return response.trim();
+  } catch (error) {
+    console.error('Error generando respuesta informativa:', error);
+    return 'Renata es una plataforma que te ayuda a gestionar tus obligaciones tributarias de forma automatica. Para mas informacion, escribenos a contacto@renata.cl';
+  }
+}
 
 /**
  * POST /api/prospecto/message
@@ -48,39 +228,59 @@ router.post('/message', async (c) => {
     const { telefono, mensaje, tipoMensajeOriginal } = await c.req.json();
 
     if (!telefono || !mensaje) {
-      return c.json({ error: 'Se requiere teléfono y mensaje' }, 400);
+      return c.json({ error: 'Se requiere telefono y mensaje' }, 400);
     }
 
-    // Actualizar preferencia de modo si envió audio
-    if (tipoMensajeOriginal === 'audio') {
-      await actualizarModoSegunInput(telefono, 'audio', c.env);
+    // PASO 1: Obtener historial de conversacion desde D1
+    const history = await getConversationHistory(c.env.DB, telefono);
+
+    // PASO 2: Si es el primer mensaje, enviar mensaje de bienvenida
+    if (history.length === 0) {
+      // Formatear respuesta (texto o audio)
+      const respuestaFormateada = await formatResponse({
+        texto: mensajeBienvenida,
+        telefono,
+        env: c.env,
+        userMode: tipoMensajeOriginal === 'audio' ? 'audio' : null
+      });
+
+      if (respuestaFormateada.tipo === 'audio') {
+        return c.json({
+          tipo: 'audio',
+          contenido: Array.from(new Uint8Array(respuestaFormateada.contenido)),
+          mimeType: respuestaFormateada.mimeType
+        });
+      } else {
+        return c.json({ tipo: 'texto', respuesta: respuestaFormateada.contenido });
+      }
     }
 
-    // Verificar si hay una sesión de registro en curso
-    const sessionKey = `registro:${telefono}`;
-    const session = await c.env.SESSIONS_KV.get(sessionKey, { type: 'json' });
+    // PASO 3: Clasificar intencion con OpenAI
+    const intencion = await clasificarIntencion(c.env.OPENAI_API_KEY, mensaje, history);
 
+    console.log(`Intencion clasificada: ${intencion} para telefono ${telefono}`);
+
+    // PASO 4: Generar respuesta segun clasificacion
     let respuestaTexto;
 
-    if (session) {
-      // Continuar proceso de registro
-      respuestaTexto = await handleRegistroFlow(c.env, telefono, mensaje, session);
+    if (intencion === 'registrar') {
+      respuestaTexto = await generarRespuestaRegistro(c.env.OPENAI_API_KEY, mensaje, history);
     } else {
-      // Primera interacción o consulta general
-      respuestaTexto = await handlePrimerMensaje(c.env, telefono, mensaje);
+      respuestaTexto = await generarRespuestaOtro(c.env.OPENAI_API_KEY, mensaje, history);
     }
 
-    // Log del evento
-    await logEvent(c.env.DB, null, 'PROSPECTO_MESSAGE', `${telefono}: ${mensaje.substring(0, 50)}...`);
+    // PASO 5: Guardar en historial D1
+    await saveToConversationHistory(c.env.DB, telefono, mensaje, respuestaTexto);
 
-    // ⭐ FORMATEAR RESPUESTA (texto o audio según preferencia del usuario)
+    // PASO 6: Formatear respuesta (texto o audio) usando ResponseFormatter
     const respuestaFormateada = await formatResponse({
       texto: respuestaTexto,
       telefono,
-      env: c.env
+      env: c.env,
+      userMode: tipoMensajeOriginal === 'audio' ? 'audio' : null
     });
 
-    // Retornar en formato unificado
+    // PASO 7: Retornar en formato unificado
     if (respuestaFormateada.tipo === 'audio') {
       return c.json({
         tipo: 'audio',
@@ -88,282 +288,13 @@ router.post('/message', async (c) => {
         mimeType: respuestaFormateada.mimeType
       });
     } else {
-      return c.json({
-        tipo: 'texto',
-        respuesta: respuestaFormateada.contenido
-      });
+      return c.json({ tipo: 'texto', respuesta: respuestaFormateada.contenido });
     }
 
   } catch (error) {
-    console.error('Error en prospecto handler:', error);
+    console.error('Error procesando mensaje de prospecto:', error);
     return c.json({ error: 'Error al procesar mensaje' }, 500);
   }
 });
-
-/**
- * Maneja el primer mensaje de un prospecto
- */
-async function handlePrimerMensaje(env, telefono, mensaje) {
-  const mensajeNormalizado = mensaje.trim().toUpperCase();
-
-  // Si envía el código directamente
-  if (mensajeNormalizado === CODIGO_ACTIVACION) {
-    return await iniciarRegistro(env, telefono);
-  }
-
-  // Si consulta sobre servicios
-  if (mensajeNormalizado === '1') {
-    return getServicioContabilidad();
-  }
-
-  if (mensajeNormalizado === '2') {
-    return getServicioRenataAI();
-  }
-
-  // Mensaje de bienvenida por defecto
-  return getMensajeBienvenida();
-}
-
-/**
- * Maneja el flujo de registro paso a paso
- */
-async function handleRegistroFlow(env, telefono, mensaje, session) {
-  const sessionKey = `registro:${telefono}`;
-  const { step, data } = session;
-
-  switch (step) {
-    case 'solicitar_rut':
-      return await handleStepRUT(env, telefono, mensaje, data);
-
-    case 'solicitar_nombre':
-      return await handleStepNombre(env, telefono, mensaje, data);
-
-    case 'solicitar_password':
-      return await handleStepPassword(env, telefono, mensaje, data);
-
-    case 'solicitar_clave_sii':
-      return await handleStepClaveSII(env, telefono, mensaje, data);
-
-    default:
-      // Sesión inválida, reiniciar
-      await env.SESSIONS_KV.delete(sessionKey);
-      return 'Sesión expirada. Por favor envía tu código de activación nuevamente.';
-  }
-}
-
-// ========== HANDLERS DE CADA PASO DEL REGISTRO ==========
-
-async function handleStepRUT(env, telefono, mensaje, data) {
-  const rut = mensaje.trim();
-
-  // Validar formato básico
-  const rutRegex = /^\d{7,8}-[\dkK]$/;
-  if (!rutRegex.test(rut)) {
-    return 'Por favor ingresa un RUT válido en formato: 12345678-9';
-  }
-
-  // Verificar si ya existe
-  const existente = await env.DB.prepare(
-    'SELECT rut FROM contributors WHERE rut = ?'
-  ).bind(rut).first();
-
-  if (existente) {
-    await env.SESSIONS_KV.delete(`registro:${telefono}`);
-    return 'Este RUT ya está registrado. Si olvidaste tu contraseña, contacta a soporte.';
-  }
-
-  // Guardar y avanzar
-  data.rut = rut;
-  await env.SESSIONS_KV.put(
-    `registro:${telefono}`,
-    JSON.stringify({ step: 'solicitar_nombre', data }),
-    { expirationTtl: 900 }
-  );
-
-  return '✅ RUT registrado\n\n📋 *Paso 2 de 4*\n¿Cuál es el *nombre de tu empresa o razón social*?';
-}
-
-async function handleStepNombre(env, telefono, mensaje, data) {
-  const nombre = mensaje.trim();
-
-  if (nombre.length < 3) {
-    return 'Por favor ingresa un nombre válido (mínimo 3 caracteres)';
-  }
-
-  data.nombre = nombre;
-  await env.SESSIONS_KV.put(
-    `registro:${telefono}`,
-    JSON.stringify({ step: 'solicitar_password', data }),
-    { expirationTtl: 900 }
-  );
-
-  return '✅ Nombre registrado\n\n📋 *Paso 3 de 4*\nCrea una *contraseña* para tu cuenta (mínimo 6 caracteres):';
-}
-
-async function handleStepPassword(env, telefono, mensaje, data) {
-  const password = mensaje.trim();
-
-  if (password.length < 6) {
-    return 'La contraseña debe tener al menos 6 caracteres. Intenta nuevamente:';
-  }
-
-  data.password = password;
-  await env.SESSIONS_KV.put(
-    `registro:${telefono}`,
-    JSON.stringify({ step: 'solicitar_clave_sii', data }),
-    { expirationTtl: 900 }
-  );
-
-  return '✅ Contraseña creada\n\n📋 *Paso 4 de 4*\nFinalmente, ingresa tu *clave del SII* para acceder a tus datos tributarios:\n\n🔒 Tu información está segura y encriptada.';
-}
-
-async function handleStepClaveSII(env, telefono, mensaje, data) {
-  const claveSII = mensaje.trim();
-
-  if (claveSII.length < 4) {
-    return 'Por favor ingresa tu clave del SII:';
-  }
-
-  data.clave_sii = claveSII;
-
-  // Completar registro
-  return await completarRegistro(env, telefono, data);
-}
-
-// ========== FUNCIONES AUXILIARES ==========
-
-/**
- * Inicia el proceso de registro
- */
-async function iniciarRegistro(env, telefono) {
-  const sessionData = {
-    step: 'solicitar_rut',
-    data: { telefono }
-  };
-
-  await env.SESSIONS_KV.put(
-    `registro:${telefono}`,
-    JSON.stringify(sessionData),
-    { expirationTtl: 900 } // 15 minutos
-  );
-
-  return `✅ ¡Código válido!
-
-Vamos a registrar tu empresa en Renata AI.
-
-📋 *Paso 1 de 4*
-Por favor ingresa tu *RUT* en formato: 12345678-9`;
-}
-
-/**
- * Completa el registro del prospecto como cliente
- */
-async function completarRegistro(env, telefono, data) {
-  try {
-    // Importar bcrypt para hashear password
-    const bcrypt = await import('bcryptjs');
-    const passwordHash = await bcrypt.hash(data.password, 10);
-
-    // Insertar en tabla contributors
-    await env.DB.prepare(`
-      INSERT INTO contributors (rut, nombre, password_hash, clave_sii, telefono, verified)
-      VALUES (?, ?, ?, ?, ?, 0)
-    `).bind(data.rut, data.nombre, passwordHash, data.clave_sii, telefono).run();
-
-    // Generar OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Math.floor(Date.now() / 1000) + 300; // 5 minutos
-
-    await env.DB.prepare(`
-      INSERT INTO otp (rut, code, expires_at)
-      VALUES (?, ?, ?)
-    `).bind(data.rut, otpCode, expiresAt).run();
-
-    // Limpiar sesión
-    await env.SESSIONS_KV.delete(`registro:${telefono}`);
-
-    // Log
-    await logEvent(env.DB, data.rut, 'REGISTRO_PROSPECTO', 'Prospecto completó registro');
-
-    // TODO: Aquí puedes llamar al servicio de WhatsApp para enviar OTP
-    // O usar ElevenLabs para mensaje de voz
-
-    return `🎉 ¡Registro exitoso!
-
-*Empresa:* ${data.nombre}
-*RUT:* ${data.rut}
-
-Tu código de verificación OTP es: *${otpCode}*
-
-⏱️ Expira en 5 minutos.
-
-Para verificar tu cuenta, responde con: VERIFICAR ${otpCode}`;
-
-  } catch (error) {
-    console.error('Error completando registro:', error);
-    await env.SESSIONS_KV.delete(`registro:${telefono}`);
-    return 'Ocurrió un error al completar tu registro. Por favor contacta a soporte.';
-  }
-}
-
-/**
- * Mensajes informativos
- */
-function getMensajeBienvenida() {
-  return `¡Hola! 👋 Bienvenido a *Renata AI*
-
-Veo que aún no tienes una cuenta registrada.
-
-*¿Tienes un código de activación?*
-Si ya contrataste nuestros servicios, envía tu código para comenzar el registro de tu empresa.
-
-*¿Aún no eres cliente?*
-Conoce nuestros servicios:
-
-📊 *1)* Servicios de Contabilidad
-🤖 *2)* Agente IA Renata
-
-Escribe el número para más información.`;
-}
-
-function getServicioContabilidad() {
-  return `📊 *Servicios de Contabilidad*
-
-Gestión contable completa para tu empresa:
-
-✅ Declaraciones mensuales y anuales
-✅ Libro de compras y ventas
-✅ Conciliación bancaria
-✅ Estados financieros
-✅ Asesoría tributaria permanente
-
-💰 Planes desde $150.000/mes
-
-📧 contacto@renata-ai.cl
-📱 +56 9 XXXX XXXX
-
-¿Quieres conocer otro servicio? Escribe *2* para Agente IA Renata.`;
-}
-
-function getServicioRenataAI() {
-  return `🤖 *Agente IA Renata*
-
-Tu asistente tributario inteligente 24/7:
-
-✅ Consultas sobre ventas y compras del SII
-✅ Análisis de contratos con IA
-✅ Reportes tributarios instantáneos
-✅ Acceso por WhatsApp a tus datos
-✅ Respuestas en lenguaje natural
-
-💰 Desde $50.000/mes
-
-Requiere código de activación.
-
-📧 contacto@renata-ai.cl
-📱 +56 9 XXXX XXXX
-
-¿Quieres conocer otro servicio? Escribe *1* para Contabilidad.`;
-}
 
 export default router;
