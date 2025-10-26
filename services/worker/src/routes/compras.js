@@ -18,7 +18,7 @@ router.get('/resumen', async (c) => {
     // Query purchases summary from D1
     const { results } = await c.env.DB.prepare(`
       SELECT
-        dcvNombreTipoDoc as tipo_doc,
+        dcvNombreTipoDoc as tipo_documento,
         rsmnTipoDocInteger as codigo_tipo,
         rsmnTotDoc as cantidad_docs,
         rsmnMntNeto as monto_neto,

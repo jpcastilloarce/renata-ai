@@ -21,6 +21,7 @@ Características de tu personalidad:
 - Usas ejemplos concretos cuando es necesario
 - Siempre saludas al usuario por su nombre cuando está disponible
 - Respondes en español de Chile
+- Cuando Pregunten por detalle de Factura se refiere al detalle de Compra, donde está el proveedor
 
 Limitaciones:
 - NO puedes realizar trámites directamente en el SII
@@ -84,9 +85,87 @@ router.post('/message', async (c) => {
     const intents = detectIntents(mensaje);
     const questionParts = splitQuestionByIntent(mensaje, intents);
     let respuestas = [];
-    for (const intent of intents) {
-      const fragment = questionParts[intent] || mensaje;
-      if (intent === 'ventas' || intent === 'compras') {
+    let proveedorPrincipal = null;
+    let periodoProveedor = null;
+    let yearProveedor = null;
+    let monthProveedor = null;
+    for (let i = 0; i < intents.length; i++) {
+      const intent = intents[i];
+      const fragments = questionParts[intent] || [mensaje];
+      for (const fragment of fragments) {
+        if (intent === 'detalle_compras' && /mayor proveedor|proveedor principal|principal proveedor|proveedor más grande|proveedor más importante/i.test(fragment)) {
+        // Obtener el mayor proveedor y guardar para la siguiente intención
+        const months = {
+          'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+          'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+          'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+        };
+        let monthNum = null;
+        for (const [month, num] of Object.entries(months)) {
+          if (fragment.toLowerCase().includes(month)) {
+            monthNum = num;
+            monthProveedor = monthNum;
+            break;
+          }
+        }
+        const yearMatch = fragment.match(/20\d{2}/);
+        yearProveedor = yearMatch ? yearMatch[0] : new Date().getFullYear();
+        periodoProveedor = monthNum ? `${yearProveedor}-${monthNum}` : null;
+        // Buscar detalle de compras para ese periodo
+        const { results } = await c.env.DB.prepare(`
+          SELECT detRznSoc, SUM(detMntTotal) as total
+          FROM compras_detalle
+          WHERE rut = ? ${periodoProveedor ? 'AND periodo = ?' : ''}
+          GROUP BY detRznSoc
+          ORDER BY total DESC
+          LIMIT 1
+        `).bind(...(periodoProveedor ? [rut, periodoProveedor] : [rut])).all();
+        if (results.length > 0) {
+          proveedorPrincipal = results[0].detRznSoc;
+        }
+        // Respuesta normal
+        respuestas.push(await handleDetailQuestion(c.env, rut, fragment, intent));
+      } else if (intent === 'compras' && proveedorPrincipal && /lista.*compra|muestrame.*compra|detalle.*compra|ver.*compra/i.test(fragment)) {
+        // Mostrar lista de compras SOLO de ese proveedor y periodo
+        if (periodoProveedor && proveedorPrincipal) {
+          const { results } = await c.env.DB.prepare(`
+            SELECT detTipoDoc, detNroDoc, detRznSoc, detMntTotal
+            FROM compras_detalle
+            WHERE rut = ? AND periodo = ? AND detRznSoc = ?
+            ORDER BY detMntTotal DESC
+            LIMIT 10
+          `).bind(rut, periodoProveedor, proveedorPrincipal).all();
+          if (results.length > 0) {
+            const monthName = Object.keys({
+              'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+              'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+              'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+            }).find(key => {
+              return {
+                'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+                'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+                'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+              }[key] === monthProveedor;
+            });
+            let detalle = results.map(r => `DTE ${r.detTipoDoc} folio ${r.detNroDoc} - ${r.detRznSoc}: CLP ${Number(r.detMntTotal).toLocaleString('es-CL')}`).join('\n');
+            respuestas.push(`Lista de compras a tu principal proveedor (${proveedorPrincipal}) en ${monthName} ${yearProveedor} (máximo 10):\n${detalle}`);
+          } else {
+            respuestas.push(`No encontré compras a tu principal proveedor (${proveedorPrincipal}) en el periodo consultado.`);
+          }
+        } else {
+          respuestas.push('No se pudo determinar el periodo o proveedor principal para mostrar la lista de compras.');
+        }
+      } else if (intent === 'iva') {
+        respuestas.push(await handleIVAQuestion(c.env, rut, fragment));
+      } else if (intent === 'rentabilidad') {
+        respuestas.push(await handleRentabilidadQuestion(c.env, rut, fragment));
+      } else if (intent === 'clientes') {
+        respuestas.push(await handleClientesQuestion(c.env, rut, fragment));
+      } else if (intent === 'proveedores') {
+        respuestas.push(await handleProveedoresQuestion(c.env, rut, fragment));
+      } else if (intent === 'reserva') {
+        respuestas.push(await handleReservaQuestion(c.env, rut, fragment));
+      } else if (intent === 'ventas' || intent === 'compras') {
         respuestas.push(await handleTaxQuestion(c.env, rut, fragment, intent));
       } else if (intent === 'detalle_ventas' || intent === 'detalle_compras') {
         respuestas.push(await handleDetailQuestion(c.env, rut, fragment, intent));
@@ -103,6 +182,7 @@ router.post('/message', async (c) => {
           respuestas.push('No pude encontrar información relevante.');
         }
       }
+    }
     }
     // Post-procesamiento para insights adicionales
     let answer = respuestas.join('\n\n');
@@ -161,10 +241,36 @@ function detectIntents(question) {
   const intents = [];
   for (const fragment of fragments) {
     const l = fragment.toLowerCase();
-    if (l.match(/detalle.*(venta|factur)/) || l.match(/(venta|factur).*detalle/)) intents.push('detalle_ventas');
+
+    // IVA y cálculos tributarios
+    if (l.match(/iva.*pagar|pagar.*iva|iva.*debo|cuánto.*iva|iva.*débito|iva.*crédito|iva.*cobr|saldo.*pagar|saldo.*favor/)) {
+      intents.push('iva');
+    }
+    // Rentabilidad y márgenes
+    else if (l.match(/ganancia|pérdida|ganando|margen|rentabilidad|utilidad|quedó.*libre|estoy mejor|estoy peor/)) {
+      intents.push('rentabilidad');
+    }
+    // Clientes principales
+    else if (l.match(/principales clientes|mejores clientes|cliente.*más|a quién.*vend/)) {
+      intents.push('clientes');
+    }
+    // Proveedores principales (pero no el mayor proveedor específico)
+    else if (l.match(/principales proveedores|proveedores.*más|a quién.*compr/) && !l.match(/mayor proveedor|proveedor principal/)) {
+      intents.push('proveedores');
+    }
+    // Reserva para impuestos
+    else if (l.match(/guardar.*impuesto|reservar|debería.*separar|cuánta.*plata.*impuesto/)) {
+      intents.push('reserva');
+    }
+    // Detectar preguntas sobre el mayor proveedor o proveedor principal
+    else if (l.match(/mayor proveedor|proveedor principal|principal proveedor|proveedor más grande|proveedor más importante/)) {
+      intents.push('detalle_compras');
+    }
+    else if (l.match(/detalle.*(venta|factur)/) || l.match(/(venta|factur).*detalle/)) intents.push('detalle_ventas');
     else if (l.match(/detalle.*(compra|proveedor)/) || l.match(/(compra|proveedor).*detalle/)) intents.push('detalle_compras');
     else if ((l.includes('vendí') || (l.includes('venta') && !l.includes('detalle')) || l.includes('factur'))) intents.push('ventas');
-    else if ((l.includes('compré') || (l.includes('compra') && !l.includes('detalle')) || l.includes('proveedor'))) intents.push('compras');
+    else if ((l.includes('compré') || (l.includes('compra') && !l.includes('detalle')))) intents.push('compras');
+    else if (l.includes('proveedor')) intents.push('detalle_compras');
     else if (l.includes('contrato') || l.includes('cláusula') || l.includes('vigente') || l.includes('normativa')) intents.push('contrato');
     else intents.push('general');
   }
@@ -176,9 +282,10 @@ function splitQuestionByIntent(question, intents) {
   // Separar por " y " o ". " o "? " para preguntas compuestas
   const fragments = question.split(/\s+y\s+|\.\s+|\?\s+/i).map(f => f.trim()).filter(Boolean);
   const mapping = {};
-  // Heurística simple: asignar fragmento por orden de aparición
   for (let i = 0; i < intents.length; i++) {
-    mapping[intents[i]] = fragments[i] || question;
+    const intent = intents[i];
+    if (!mapping[intent]) mapping[intent] = [];
+    mapping[intent].push(fragments[i] || question);
   }
   return mapping;
 }
@@ -211,6 +318,338 @@ function categorizeQuestion(question) {
   return 'general';
 }
 
+// Handler para preguntas de IVA
+async function handleIVAQuestion(env, rut, question) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  // Detectar periodo
+  let monthNum = null;
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+  const periodo = monthNum ? `${year}-${monthNum}` : null;
+
+  if (!periodo) {
+    // Usar el último periodo disponible
+    const { results: lastPeriod } = await env.DB.prepare(
+      'SELECT periodo FROM ventas_detalle WHERE rut = ? ORDER BY periodo DESC LIMIT 1'
+    ).bind(rut).all();
+
+    if (lastPeriod.length === 0) {
+      return 'No encontré datos de ventas en tu historial.';
+    }
+
+    const [y, m] = lastPeriod[0].periodo.split('-');
+    const monthName = Object.keys(months).find(key => months[key] === m);
+
+    const ivaData = await calculateIVA(env, rut, lastPeriod[0].periodo);
+    return formatIVAResponse(ivaData, monthName, y);
+  }
+
+  const ivaData = await calculateIVA(env, rut, periodo);
+  const monthName = Object.keys(months).find(key => months[key] === monthNum);
+  return formatIVAResponse(ivaData, monthName, year);
+}
+
+async function calculateIVA(env, rut, periodo) {
+  // IVA Débito (ventas)
+  const { results: ventas } = await env.DB.prepare(`
+    SELECT SUM(detMntIVA) as iva_debito, SUM(detMntTotal) as total_ventas, SUM(detMntNeto) as neto_ventas
+    FROM ventas_detalle
+    WHERE rut = ? AND periodo = ?
+  `).bind(rut, periodo).all();
+
+  // IVA Crédito (compras)
+  const { results: compras } = await env.DB.prepare(`
+    SELECT SUM(detIVARecuperable) as iva_credito, SUM(detMntTotal) as total_compras, SUM(detMntNeto) as neto_compras
+    FROM compras_detalle
+    WHERE rut = ? AND periodo = ?
+  `).bind(rut, periodo).all();
+
+  const ivaDebito = Number(ventas[0]?.iva_debito || 0);
+  const ivaCredito = Number(compras[0]?.iva_credito || 0);
+  const saldo = ivaDebito - ivaCredito;
+
+  return {
+    ivaDebito,
+    ivaCredito,
+    saldo,
+    totalVentas: Number(ventas[0]?.total_ventas || 0),
+    totalCompras: Number(compras[0]?.total_compras || 0),
+    netoVentas: Number(ventas[0]?.neto_ventas || 0),
+    netoCompras: Number(compras[0]?.neto_compras || 0)
+  };
+}
+
+function formatIVAResponse(data, monthName, year) {
+  const tipo = data.saldo > 0 ? 'a pagar' : 'a favor';
+  const saldoAbs = Math.abs(data.saldo);
+
+  return `📊 Resumen de IVA para ${monthName} ${year}:
+
+💰 IVA Débito (ventas): CLP ${data.ivaDebito.toLocaleString('es-CL')}
+💳 IVA Crédito (compras): CLP ${data.ivaCredito.toLocaleString('es-CL')}
+━━━━━━━━━━━━━━━━━
+${data.saldo >= 0 ? '🔴' : '🟢'} Saldo ${tipo}: CLP ${saldoAbs.toLocaleString('es-CL')}
+
+📈 Total ventas: CLP ${data.totalVentas.toLocaleString('es-CL')}
+📉 Total compras: CLP ${data.totalCompras.toLocaleString('es-CL')}`;
+}
+
+// Handler para preguntas de rentabilidad
+async function handleRentabilidadQuestion(env, rut, question) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  // Detectar periodo
+  let monthNum = null;
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+  const periodo = monthNum ? `${year}-${monthNum}` : null;
+
+  if (!periodo) {
+    // Usar último periodo
+    const { results: lastPeriod } = await env.DB.prepare(
+      'SELECT periodo FROM ventas_detalle WHERE rut = ? ORDER BY periodo DESC LIMIT 1'
+    ).bind(rut).all();
+
+    if (lastPeriod.length === 0) {
+      return 'No encontré datos para calcular rentabilidad.';
+    }
+
+    const [y, m] = lastPeriod[0].periodo.split('-');
+    const monthName = Object.keys(months).find(key => months[key] === m);
+    const rentabilidad = await calculateRentabilidad(env, rut, lastPeriod[0].periodo);
+    return formatRentabilidadResponse(rentabilidad, monthName, y);
+  }
+
+  const rentabilidad = await calculateRentabilidad(env, rut, periodo);
+  const monthName = Object.keys(months).find(key => months[key] === monthNum);
+  return formatRentabilidadResponse(rentabilidad, monthName, year);
+}
+
+async function calculateRentabilidad(env, rut, periodo) {
+  const { results: ventas } = await env.DB.prepare(`
+    SELECT SUM(detMntNeto) as ingresos
+    FROM ventas_detalle
+    WHERE rut = ? AND periodo = ?
+  `).bind(rut, periodo).all();
+
+  const { results: compras } = await env.DB.prepare(`
+    SELECT SUM(detMntNeto) as gastos
+    FROM compras_detalle
+    WHERE rut = ? AND periodo = ?
+  `).bind(rut, periodo).all();
+
+  const ingresos = Number(ventas[0]?.ingresos || 0);
+  const gastos = Number(compras[0]?.gastos || 0);
+  const utilidad = ingresos - gastos;
+  const margen = ingresos > 0 ? (utilidad / ingresos * 100) : 0;
+  const ivaAPagar = utilidad * 0.19;
+
+  return { ingresos, gastos, utilidad, margen, ivaAPagar };
+}
+
+function formatRentabilidadResponse(data, monthName, year) {
+  const estado = data.utilidad >= 0 ? '✅ Ganancia' : '❌ Pérdida';
+  const utilidadNeta = data.utilidad - data.ivaAPagar;
+
+  return `💼 Análisis de Rentabilidad - ${monthName} ${year}:
+
+📈 Ingresos (neto): CLP ${data.ingresos.toLocaleString('es-CL')}
+📉 Gastos (neto): CLP ${data.gastos.toLocaleString('es-CL')}
+━━━━━━━━━━━━━━━━━
+${estado}: CLP ${Math.abs(data.utilidad).toLocaleString('es-CL')}
+📊 Margen: ${data.margen.toFixed(1)}%
+
+💰 Después de IVA (~19%): CLP ${utilidadNeta.toLocaleString('es-CL')}`;
+}
+
+// Handler para principales clientes
+async function handleClientesQuestion(env, rut, question) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  let monthNum = null;
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+  const periodo = monthNum ? `${year}-${monthNum}` : null;
+
+  const { results } = await env.DB.prepare(`
+    SELECT detRznSoc, SUM(detMntTotal) as total, COUNT(*) as cantidad
+    FROM ventas_detalle
+    WHERE rut = ? ${periodo ? 'AND periodo = ?' : ''}
+    GROUP BY detRznSoc
+    ORDER BY total DESC
+    LIMIT 5
+  `).bind(...(periodo ? [rut, periodo] : [rut])).all();
+
+  if (results.length === 0) {
+    return 'No encontré clientes en tu historial de ventas.';
+  }
+
+  const monthName = monthNum ? Object.keys(months).find(key => months[key] === monthNum) : 'todo el período';
+  let respuesta = `👥 Tus principales clientes en ${monthName} ${year}:\n\n`;
+
+  results.forEach((cliente, idx) => {
+    respuesta += `${idx + 1}. ${cliente.detRznSoc}\n`;
+    respuesta += `   💰 Total: CLP ${Number(cliente.total).toLocaleString('es-CL')} (${cliente.cantidad} documentos)\n\n`;
+  });
+
+  return respuesta.trim();
+}
+
+// Handler para principales proveedores
+async function handleProveedoresQuestion(env, rut, question) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  let monthNum = null;
+  for (const [month, num] of Object.entries(months)) {
+    if (question.toLowerCase().includes(month)) {
+      monthNum = num;
+      break;
+    }
+  }
+  const yearMatch = question.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
+  const periodo = monthNum ? `${year}-${monthNum}` : null;
+
+  const { results } = await env.DB.prepare(`
+    SELECT detRznSoc, SUM(detMntTotal) as total, COUNT(*) as cantidad
+    FROM compras_detalle
+    WHERE rut = ? ${periodo ? 'AND periodo = ?' : ''}
+    GROUP BY detRznSoc
+    ORDER BY total DESC
+    LIMIT 5
+  `).bind(...(periodo ? [rut, periodo] : [rut])).all();
+
+  if (results.length === 0) {
+    return 'No encontré proveedores en tu historial de compras.';
+  }
+
+  const monthName = monthNum ? Object.keys(months).find(key => months[key] === monthNum) : 'todo el período';
+  let respuesta = `🏪 Tus principales proveedores en ${monthName} ${year}:\n\n`;
+
+  results.forEach((proveedor, idx) => {
+    respuesta += `${idx + 1}. ${proveedor.detRznSoc}\n`;
+    respuesta += `   💰 Total: CLP ${Number(proveedor.total).toLocaleString('es-CL')} (${proveedor.cantidad} documentos)\n\n`;
+  });
+
+  return respuesta.trim();
+}
+
+// Handler para reserva de impuestos
+async function handleReservaQuestion(env, rut, question) {
+  const months = {
+    'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+    'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+    'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
+  };
+
+  // Usar último periodo
+  const { results: lastPeriod } = await env.DB.prepare(
+    'SELECT periodo FROM ventas_detalle WHERE rut = ? ORDER BY periodo DESC LIMIT 1'
+  ).bind(rut).all();
+
+  if (lastPeriod.length === 0) {
+    return 'No encontré datos para calcular la reserva de impuestos.';
+  }
+
+  const periodo = lastPeriod[0].periodo;
+  const ivaData = await calculateIVA(env, rut, periodo);
+  const rentabilidad = await calculateRentabilidad(env, rut, periodo);
+
+  const [y, m] = periodo.split('-');
+  const monthName = Object.keys(months).find(key => months[key] === m);
+
+  // Calcular reserva recomendada
+  const ivaAPagar = Math.max(0, ivaData.saldo);
+  const impuestoRenta = rentabilidad.utilidad > 0 ? rentabilidad.utilidad * 0.25 : 0; // ~25% aprox
+  const reservaTotal = ivaAPagar + impuestoRenta;
+
+  return `💰 Reserva Recomendada de Impuestos (basado en ${monthName} ${y}):
+
+🔴 IVA a pagar: CLP ${ivaAPagar.toLocaleString('es-CL')}
+🔴 Impuesto a la renta estimado (~25%): CLP ${impuestoRenta.toLocaleString('es-CL')}
+━━━━━━━━━━━━━━━━━
+💵 Total recomendado a reservar: CLP ${reservaTotal.toLocaleString('es-CL')}
+
+💡 Tip: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.`;
+}
+
+async function handleContractQuestion(env, rut, question) {
+  try {
+    // Usar Vectorize para buscar en los contratos
+    const embedding = await env.AI.run('@cf/baai/bge-base-en-v1.5', {
+      text: question
+    });
+
+    const results = await env.CONTRATOS_INDEX.query(embedding.data[0], {
+      topK: 3,
+      filter: { rut }
+    });
+
+    if (results.matches && results.matches.length > 0) {
+      // Combinar contextos encontrados
+      const contexts = results.matches.map(m => m.metadata?.text || '').filter(Boolean);
+
+      if (contexts.length > 0) {
+        // Usar OpenAI para generar respuesta basada en contexto
+        const prompt = `Basándote en la siguiente información de contratos, responde la pregunta del usuario de manera concisa:
+
+Contexto:
+${contexts.join('\n\n')}
+
+Pregunta: ${question}
+
+Responde de manera clara y concisa en español de Chile.`;
+
+        const aiResponse = await callOpenAI(env.OPENAI_API_KEY, [
+          { role: 'user', content: prompt }
+        ]);
+
+        return aiResponse || 'No pude generar una respuesta sobre contratos.';
+      }
+    }
+
+    return 'No encontré información relevante en tus contratos. ¿Podrías reformular tu pregunta?';
+  } catch (error) {
+    console.error('Error in handleContractQuestion:', error);
+    return 'Lo siento, tuve un problema al buscar en tus contratos.';
+  }
+}
+
 async function handleTaxQuestion(env, rut, question, type) {
   const months = {
     'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
@@ -218,95 +657,55 @@ async function handleTaxQuestion(env, rut, question, type) {
     'septiembre': '09', 'octubre': '10', 'noviembre': '11', 'diciembre': '12'
   };
 
+  // Detectar periodo en la pregunta
   let periodo = null;
   let monthNum = null;
-
-  // Extract month from question
   for (const [month, num] of Object.entries(months)) {
     if (question.toLowerCase().includes(month)) {
       monthNum = num;
       break;
     }
   }
-
-  // Extract year from question (e.g., "2023", "2024")
   const yearMatch = question.match(/20\d{2}/);
   const year = yearMatch ? yearMatch[0] : new Date().getFullYear();
-
   if (monthNum) {
     periodo = `${year}-${monthNum}`;
-  } else {
-    // If no month specified, try to find any data for this RUT
-    const table = type === 'ventas' ? 'ventas_resumen' : 'compras_resumen';
+  }
+
+  // Determinar tabla según tipo
+  const table = type === 'ventas' ? 'ventas' : 'compras';
+  const label = type === 'ventas' ? 'vendiste' : 'compraste';
+
+  if (!periodo) {
+    // Si no hay periodo, buscar el último disponible
     const { results } = await env.DB.prepare(`
-      SELECT periodo, SUM(rsmnMntTotal) as total
+      SELECT periodo, SUM(mntTotal) as total
       FROM ${table}
       WHERE rut = ?
       GROUP BY periodo
       ORDER BY periodo DESC
       LIMIT 1
     `).bind(rut).all();
-
-    if (results.length > 0 && results[0].total) {
-      const total = results[0].total;
+    if (results.length > 0) {
       const [year, month] = results[0].periodo.split('-');
       const monthName = Object.keys(months).find(key => months[key] === month);
-      return `Tu último registro de ${type} fue en ${monthName} ${year} por CLP ${total.toLocaleString('es-CL')}.`;
+      return `Tu último registro de ${type} fue en ${monthName} ${year} con un total de CLP ${Number(results[0].total).toLocaleString('es-CL')}.`;
     }
-
-    return `No encontré datos de ${type} en tu historial.`;
+    return `No encontré registros de ${type} en tu historial.`;
   }
 
-  const table = type === 'ventas' ? 'ventas_resumen' : 'compras_resumen';
+  // Buscar monto para el periodo
   const { results } = await env.DB.prepare(`
-    SELECT SUM(rsmnMntTotal) as total
+    SELECT SUM(mntTotal) as total
     FROM ${table}
     WHERE rut = ? AND periodo = ?
   `).bind(rut, periodo).all();
 
   if (results.length > 0 && results[0].total) {
-    const total = results[0].total;
     const monthName = Object.keys(months).find(key => months[key] === monthNum);
-    return `En ${monthName} de ${year} ${type === 'ventas' ? 'vendiste' : 'compraste'} CLP ${total.toLocaleString('es-CL')}.`;
+    return `En ${monthName} ${year} ${label} un total de CLP ${Number(results[0].total).toLocaleString('es-CL')}.`;
   }
-
-  return `No encontré datos de ${type} para ${monthNum ? Object.keys(months).find(key => months[key] === monthNum) : ''} ${year}.`;
-}
-
-async function handleContractQuestion(env, rut, question) {
-  const questionEmbedding = await env.AI.run('@cf/baai/bge-base-en-v1.5', {
-    text: question
-  });
-
-  const questionVector = questionEmbedding.data[0];
-
-  // No filter by RUT - contracts are generic SII data accessible to all contributors
-  const searchResults = await env.CONTRATOS_INDEX.query(questionVector, {
-    topK: 3,
-    returnMetadata: true
-  });
-
-  if (!searchResults.matches || searchResults.matches.length === 0) {
-    return 'No encontré información relevante en los contratos para responder esta pregunta.';
-  }
-
-  const fragments = searchResults.matches.map(match => match.metadata.content);
-  const context = fragments.join('\n\n');
-
-  const messages = [
-    {
-      role: 'system',
-      content: `Eres un asistente que responde preguntas sobre contratos. Usa el siguiente contexto para responder la pregunta del usuario:\n\n${context}`
-    },
-    {
-      role: 'user',
-      content: question
-    }
-  ];
-
-  const aiResponse = await callOpenAI(env.OPENAI_API_KEY, messages);
-
-  return aiResponse || 'No pude generar una respuesta adecuada.';
+  return `No encontré registros de ${type} para ${Object.keys(months).find(key => months[key] === monthNum)} ${year}.`;
 }
 
 // Handler para detalle de ventas y compras
@@ -331,6 +730,7 @@ async function handleDetailQuestion(env, rut, question, type) {
   }
   // Selección de tabla y campos
   let table, label, selectFields, formatRow;
+  const preguntaMayorProveedor = /mayor proveedor|proveedor principal|principal proveedor|proveedor más grande|proveedor más importante/i.test(question);
   if (type === 'detalle_ventas') {
     table = 'ventas_detalle';
     label = 'ventas';
@@ -365,12 +765,35 @@ async function handleDetailQuestion(env, rut, question, type) {
     FROM ${table}
     WHERE rut = ? AND periodo = ?
     ORDER BY detMntTotal DESC
-    LIMIT 5
+    LIMIT 20
   `).bind(rut, periodo).all();
   if (results.length > 0) {
     const monthName = Object.keys(months).find(key => months[key] === monthNum);
-    let detalle = results.map(formatRow).join('\n');
-    return `Detalle de ${label} para ${monthName} ${year}:\n${detalle}`;
+    if (preguntaMayorProveedor && type === 'detalle_compras') {
+      // Agrupar por proveedor y sumar montos
+      const proveedores = {};
+      for (const row of results) {
+        if (!proveedores[row.detRznSoc]) proveedores[row.detRznSoc] = 0;
+        proveedores[row.detRznSoc] += Number(row.detMntTotal);
+      }
+      // Encontrar el proveedor con mayor monto
+      let mayorProveedor = null;
+      let mayorMonto = 0;
+      for (const [proveedor, monto] of Object.entries(proveedores)) {
+        if (monto > mayorMonto) {
+          mayorProveedor = proveedor;
+          mayorMonto = monto;
+        }
+      }
+      if (mayorProveedor) {
+        return `Tu mayor proveedor en ${monthName} ${year} fue "${mayorProveedor}" con un total de CLP ${mayorMonto.toLocaleString('es-CL')}.`;
+      } else {
+        return `No encontré información suficiente para determinar el mayor proveedor en ${monthName} ${year}.`;
+      }
+    } else {
+      let detalle = results.map(formatRow).join('\n');
+      return `Detalle de ${label} para ${monthName} ${year}:\n${detalle}`;
+    }
   }
   return `No encontré detalles de ${label} para ${monthNum ? Object.keys(months).find(key => months[key] === monthNum) : ''} ${year}.`;
 }
