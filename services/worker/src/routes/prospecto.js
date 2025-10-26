@@ -236,6 +236,11 @@ router.post('/message', async (c) => {
 
     // PASO 2: Si es el primer mensaje, enviar mensaje de bienvenida
     if (history.length === 0) {
+      const mensajeBienvenida = 'Hola, veo que aun no tienes una cuenta creada en nuestro sistema. Tienes un codigo de activacion o necesitas contratar un servicio?';
+
+      // Guardar en historial
+      await saveToConversationHistory(c.env.DB, telefono, mensaje, mensajeBienvenida);
+
       // Formatear respuesta (texto o audio)
       const respuestaFormateada = await formatResponse({
         texto: mensajeBienvenida,
