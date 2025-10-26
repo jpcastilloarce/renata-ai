@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { logEvent } from '../utils/logger.js';
 import { callOpenAI } from '../utils/openai.js';
 import { formatResponse } from '../utils/responseFormatter.js';
 
@@ -42,6 +41,7 @@ REGLAS CRÍTICAS PARA AUDIO:
 
 FORMATO DE RESPUESTA:
 - Responde de forma concisa (máximo 3 líneas)
+- El Texto debe ser alfanumérico, sin caracteres especiales innecesarios
 - Usa un tono amigable pero profesional
 - Menciona "pesos" para montos en Chile
 - Responde directamente sin preámbulos innecesarios
@@ -223,7 +223,7 @@ router.post('/message', async (c) => {
       } else if (intent === 'proveedores') {
         respuestas.push(await handleProveedoresQuestion(c.env, rut, fragment));
       } else if (intent === 'reserva') {
-        respuestas.push(await handleReservaQuestion(c.env, rut, fragment));
+        respuestas.push(await handleReservaQuestion(c.env, rut));
       } else if (intent === 'ventas' || intent === 'compras') {
         respuestas.push(await handleTaxQuestion(c.env, rut, fragment, intent));
       } else if (intent === 'detalle_ventas' || intent === 'detalle_compras') {
@@ -231,9 +231,10 @@ router.post('/message', async (c) => {
       } else if (intent === 'contrato') {
         respuestas.push(await handleContractQuestion(c.env, rut, fragment));
       } else if (intent === 'general') {
-        // Llamada directa a OpenAI (gpt-4o) para que busque en internet
+        // Llamada a OpenAI con el system prompt del agente
         const aiFallback = await callOpenAI(c.env.OPENAI_API_KEY, [
-          { role: 'user', content: fragment }
+          { role: 'system', content: AGENT_SYSTEM_PROMPT },
+          { role: 'user', content: `Usuario: ${nombre}\nPregunta: ${fragment}` }
         ]);
         if (aiFallback) {
           respuestas.push(aiFallback);
@@ -243,15 +244,8 @@ router.post('/message', async (c) => {
       }
     }
     }
-    // Post-procesamiento para insights adicionales
+    // Combinar todas las respuestas
     let answer = respuestas.join('\n\n');
-    answer = await postProcessCombinedAnswer({
-      respuestas,
-      mensaje,
-      rut,
-      nombre,
-      fechaActual: new Date(),
-    });
 
     // Store messages
     await c.env.DB.prepare(
@@ -287,34 +281,8 @@ router.post('/message', async (c) => {
   }
 });
 
-// Post-procesamiento de respuestas combinadas para entregar insights adicionales
-async function postProcessCombinedAnswer({ respuestas, mensaje, rut, nombre, fechaActual }) {
-  let combined = respuestas.join('\n\n');
-  // Buscar si hay respuesta de ventas con monto
-  const ventaRegex = /(?:vendiste|ventas).*?CLP\s*([\d\.\,]+)/i;
-  const matchVenta = combined.match(ventaRegex);
-  let iva = null;
-  if (matchVenta) {
-    // Extraer monto de ventas
-    let montoStr = matchVenta[1].replace(/\./g, '').replace(/,/g, '');
-    let monto = parseInt(montoStr, 10);
-    if (!isNaN(monto) && monto > 0) {
-      iva = Math.round(monto * 0.19);
-      combined += `\n\n💡 Estimación de IVA: Por tus ventas, deberías declarar un IVA aproximado de ${iva.toLocaleString('es-CL')}.`;
-      // Agregar recordatorio de pago si estamos cerca de fin de mes
-      const dia = fechaActual.getDate();
-      if (dia >= 20 && dia <= 31) {
-        combined += '\n🔔 Recuerda: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.';
-      }
-    }
-  }
-  // Se puede extender para compras, contratos, etc.
-  return combined;
-}
-
 // Detecta todas las intenciones presentes en la pregunta
 function detectIntents(question) {
-  const lower = question.toLowerCase();
   const fragments = question.split(/\s+y\s+|\.\s+|\?\s+/i).map(f => f.trim()).filter(Boolean);
   const intents = [];
   for (const fragment of fragments) {
@@ -366,34 +334,6 @@ function splitQuestionByIntent(question, intents) {
     mapping[intent].push(fragments[i] || question);
   }
   return mapping;
-}
-
-// Helper functions (duplicated from contratos.js for modularity)
-
-function categorizeQuestion(question) {
-  const lowerQuestion = question.toLowerCase();
-
-  // Detalle de ventas
-  if (lowerQuestion.includes('detalle') && (lowerQuestion.includes('venta') || lowerQuestion.includes('factur'))) {
-    return 'detalle_ventas';
-  }
-  // Detalle de compras
-  if (lowerQuestion.includes('detalle') && (lowerQuestion.includes('compra') || lowerQuestion.includes('proveedor'))) {
-    return 'detalle_compras';
-  }
-  // Ventas
-  if (lowerQuestion.includes('vendí') || (lowerQuestion.includes('venta') && !lowerQuestion.includes('detalle')) || lowerQuestion.includes('factur')) {
-    return 'ventas';
-  }
-  // Compras
-  if (lowerQuestion.includes('compré') || (lowerQuestion.includes('compra') && !lowerQuestion.includes('detalle')) || lowerQuestion.includes('proveedor')) {
-    return 'compras';
-  }
-  // Contratos
-  if (lowerQuestion.includes('contrato') || lowerQuestion.includes('cláusula') || lowerQuestion.includes('vigente') || lowerQuestion.includes('normativa')) {
-    return 'contrato';
-  }
-  return 'general';
 }
 
 // Handler para preguntas de IVA
@@ -448,7 +388,7 @@ async function calculateIVA(env, rut, periodo) {
 
   // IVA Crédito (compras)
   const { results: compras } = await env.DB.prepare(`
-    SELECT SUM(detIVARecuperable) as iva_credito, SUM(detMntTotal) as total_compras, SUM(detMntNeto) as neto_compras
+    SELECT SUM(detMntIVA) as iva_credito, SUM(detMntTotal) as total_compras, SUM(detMntNeto) as neto_compras
     FROM compras_detalle
     WHERE rut = ? AND periodo = ?
   `).bind(rut, periodo).all();
@@ -641,14 +581,14 @@ async function handleProveedoresQuestion(env, rut, question) {
 
   results.forEach((proveedor, idx) => {
     respuesta += `${idx + 1}. ${proveedor.detRznSoc}\n`;
-    respuesta += `   💰 Total: ${Number(proveedor.total).toLocaleString('es-CL')} (${proveedor.cantidad} documentos)\n\n`;
+    respuesta += `   Total: ${Number(proveedor.total).toLocaleString('es-CL')} (${proveedor.cantidad} documentos)\n\n`;
   });
 
   return respuesta.trim();
 }
 
 // Handler para reserva de impuestos
-async function handleReservaQuestion(env, rut, question) {
+async function handleReservaQuestion(env, rut) {
   const months = {
     'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
     'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
@@ -680,7 +620,6 @@ async function handleReservaQuestion(env, rut, question) {
 
 IVA a pagar: ${ivaAPagar.toLocaleString('es-CL')}
 Impuesto a la renta estimado (~25%): ${impuestoRenta.toLocaleString('es-CL')}
-━━━━━━━━━━━━━━━━━
 Total recomendado a reservar:  ${reservaTotal.toLocaleString('es-CL')}
 
 Tip: El plazo para declarar y pagar el IVA (F29) vence el día 20 del mes siguiente.`;
